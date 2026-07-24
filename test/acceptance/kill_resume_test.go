@@ -115,16 +115,28 @@ func TestKilledRunResumesToIdenticalResult(t *testing.T) {
 		t.Errorf("step count after resume = %d, want %d", resumed.StepCount, baseline.StepCount)
 	}
 
-	// The result matching is not enough on its own: a control plane that re-ran every step from
-	// scratch would also produce a matching patch, while having executed every side effect twice.
-	// The ledger is appended to once per actual execution, so it is where that shows up.
+	// Matching output is not enough on its own: a control plane that threw the checkpoints away
+	// and re-ran everything from scratch would also produce a matching patch, having executed
+	// every side effect twice. The ledger gets one line per actual execution, so that shows up
+	// here and nowhere else.
+	//
+	// Exactly one step is allowed to repeat. The step that was in flight when the process died
+	// has a durable record that it started and none that it finished, so the control plane cannot
+	// know whether its side effect happened and must assume it did not. That is the at-least-once
+	// window; closing it with idempotency keys is Milestone 6. Every step whose result was
+	// already durable must be replayed, not re-executed.
 	executed := readLedger(t, interruptedLedger)
-	if dup := duplicates(executed); len(dup) > 0 {
-		t.Errorf("steps executed more than once across the kill: %v", dup)
+	if len(executed) < baseline.StepCount {
+		t.Errorf("executed only %d steps across the interrupted run, want at least %d",
+			len(executed), baseline.StepCount)
 	}
-	if len(executed) != baseline.StepCount {
-		t.Errorf("executed %d steps across the interrupted run, want %d — resume should replay "+
-			"checkpointed steps, not re-execute them", len(executed), baseline.StepCount)
+	if len(executed) > baseline.StepCount+1 {
+		t.Errorf("executed %d steps across the interrupted run, want at most %d — resume must "+
+			"replay checkpointed steps rather than re-execute them:\n%v",
+			len(executed), baseline.StepCount+1, executed)
+	}
+	if dup := duplicates(executed); len(dup) > 1 {
+		t.Errorf("more than one step executed twice across the kill: %v", dup)
 	}
 }
 
