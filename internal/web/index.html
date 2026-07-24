@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bulkhead — run trajectory</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #272e38; --text: #e6edf3; --dim: #7d8590;
+    --idle: #30363d; --running: #d29922; --done: #2ea043; --replayed: #8957e5; --failed: #da3633;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header { border-bottom: 1px solid var(--line); padding: 16px 24px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; letter-spacing: .04em; }
+  h1 span { color: var(--dim); font-weight: 400; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 14px; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; font-size: 12px; color: var(--dim); }
+  .chip b { color: var(--text); font-weight: 500; }
+  #link { color: var(--dim); font-size: 12px; }
+
+  #banner { display: none; background: var(--failed); padding: 8px 24px; font-size: 13px; }
+  #banner.show { display: block; }
+
+  main { padding: 24px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 0 0 14px; font-weight: 500; }
+
+  #steps { display: flex; flex-wrap: wrap; gap: 10px; }
+  .step {
+    width: 92px; border: 1px solid var(--idle); border-radius: 6px; padding: 8px 10px; background: #0d1117;
+  }
+  .step .n { font-size: 11px; color: var(--dim); }
+  .step .s { font-size: 11px; margin-top: 4px; }
+  .step.running { border-color: var(--running); animation: pulse 1s ease-in-out infinite; }
+  .step.running .s { color: var(--running); }
+  .step.completed { border-color: var(--done); } .step.completed .s { color: var(--done); }
+  .step.failed { border-color: var(--failed); } .step.failed .s { color: var(--failed); }
+  .step.replayed { border-color: var(--replayed); border-style: dashed; } .step.replayed .s { color: var(--replayed); }
+  @keyframes pulse { 50% { opacity: .45; } }
+
+  #tally { margin-top: 16px; font-size: 12px; color: var(--dim); display: flex; gap: 20px; flex-wrap: wrap; }
+  #tally b { color: var(--text); font-weight: 500; }
+  #note { margin-top: 10px; font-size: 12px; color: var(--replayed); min-height: 18px; }
+
+  #log { max-height: 60vh; overflow-y: auto; font-size: 12px; }
+  #log div { padding: 3px 0; border-bottom: 1px solid #1c222b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #log .k { display: inline-block; width: 120px; color: var(--dim); }
+  #log .attempt { color: var(--running); }
+  #log .replay { color: var(--replayed); }
+  #log .fin { color: var(--done); }
+  #log .err { color: var(--failed); }
+</style>
+</head>
+<body>
+<header>
+  <h1>bulkhead <span>/ run trajectory</span></h1>
+  <span class="chip">run <b id="run">—</b></span>
+  <span class="chip">attempt <b id="attempt">—</b></span>
+  <span class="chip">stream <b id="conn">idle</b></span>
+  <span class="spacer"></span>
+  <a id="link" href="#" hidden>permalink</a>
+  <button id="start">Start run</button>
+</header>
+<div id="banner">control plane unreachable — reconnecting. The trajectory is in Postgres; nothing is lost.</div>
+
+<main>
+  <section>
+    <h2>Steps</h2>
+    <div id="steps"></div>
+    <div id="tally">
+      <span>executed <b id="executed">0</b></span>
+      <span>replayed from checkpoint <b id="replayed">0</b></span>
+      <span>state <b id="state">—</b></span>
+    </div>
+    <div id="note"></div>
+  </section>
+
+  <section>
+    <h2>Trajectory events</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const stepEls = new Map();
+let source = null, attempts = 0, executed = 0, replayed = 0;
+
+function reset() {
+  stepEls.clear(); attempts = executed = replayed = 0;
+  $('steps').textContent = ''; $('log').textContent = ''; $('note').textContent = '';
+  $('attempt').textContent = '—'; $('state').textContent = 'running';
+  $('executed').textContent = '0'; $('replayed').textContent = '0';
+}
+
+function stepEl(seq) {
+  let el = stepEls.get(seq);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'step';
+    el.innerHTML = `<div class="n">step ${seq}</div><div class="s">queued</div>`;
+    stepEls.set(seq, el);
+    $('steps').append(el);
+  }
+  return el;
+}
+
+function mark(seq, state, label) {
+  const el = stepEl(seq);
+  el.className = 'step ' + state;
+  el.querySelector('.s').textContent = label;
+}
+
+function logLine(ev, cls) {
+  const at = new Date(ev.at).toLocaleTimeString();
+  const row = document.createElement('div');
+  if (cls) row.className = cls;
+  row.innerHTML = `<span class="k">${ev.kind}</span>${ev.seq ? 'seq ' + ev.seq + ' ' : ''}<span style="color:var(--dim)">${at}</span>`;
+  $('log').prepend(row);
+}
+
+function apply(ev) {
+  switch (ev.kind) {
+    case 'run_started':
+      attempts++;
+      $('attempt').textContent = attempts;
+      logLine(ev, 'attempt');
+      if (attempts > 1) {
+        const n = (ev.payload && ev.payload.checkpointed_steps) || 0;
+        $('note').textContent = `attempt ${attempts}: the agent restarts from step 1, but ${n} step(s) already have checkpoints and are answered from Postgres without executing.`;
+      }
+      break;
+    case 'step_started': mark(ev.seq, 'running', 'executing'); logLine(ev); break;
+    case 'step_completed':
+      mark(ev.seq, 'completed', 'completed');
+      $('executed').textContent = ++executed;
+      logLine(ev);
+      break;
+    case 'step_replayed':
+      mark(ev.seq, 'replayed', '⟲ replayed');
+      $('replayed').textContent = ++replayed;
+      logLine(ev, 'replay');
+      break;
+    case 'run_finished':
+      $('state').textContent = 'succeeded';
+      logLine(ev, 'fin');
+      break;
+    case 'run_failed':
+      $('state').textContent = 'failed';
+      logLine(ev, 'err');
+      break;
+  }
+}
+
+function subscribe(id) {
+  if (source) source.close();
+  $('run').textContent = id;
+  $('link').hidden = false;
+  $('link').href = '#' + id;
+  location.hash = id;
+
+  source = new EventSource(`/runs/${id}/events`);
+  source.onopen = () => { $('conn').textContent = 'live'; $('banner').classList.remove('show'); };
+  source.onmessage = e => apply(JSON.parse(e.data));
+  // EventSource reconnects on its own and sends Last-Event-ID, so the stream picks up exactly
+  // where it stopped — the same resume contract the control plane itself uses.
+  source.onerror = () => { $('conn').textContent = 'reconnecting'; $('banner').classList.add('show'); };
+}
+
+$('start').onclick = async () => {
+  const res = await fetch('/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'demo__trajectory-1' }),
+  });
+  if (!res.ok) { $('note').textContent = 'could not start run: ' + res.status; return; }
+  reset();
+  subscribe((await res.json()).id);
+};
+
+if (location.hash.length > 1) { reset(); subscribe(location.hash.slice(1)); }
+</script>
+</body>
+</html>

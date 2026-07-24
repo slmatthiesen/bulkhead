@@ -61,6 +61,24 @@ go build ./...
 go run ./cmd/bulkheadd        # control plane on 127.0.0.1:8080
 ```
 
+## Watching a run resume
+
+The control plane serves a trajectory viewer at <http://127.0.0.1:8080>. It tails
+`GET /runs/{id}/events` — server-sent events read straight off the append-only trajectory in
+Postgres — and draws one node per step.
+
+```sh
+go build -o bin/ ./cmd/...
+BULKHEAD_AGENT_CMD=./bin/fixture-agent BULKHEAD_FIXTURE_STEP_DELAY=700ms ./bin/bulkheadd
+```
+
+Open the page, press **Start run**, then `kill -9` the control plane while steps are still
+executing and start it again. The browser's `EventSource` reconnects with the last event id it
+saw, so the stream picks up exactly where it stopped — and what arrives is a second `run_started`,
+then the already-checkpointed steps coming back as **replayed** rather than executing again.
+
+The 700ms step delay only exists to make the window wide enough to kill by hand.
+
 ## The acceptance test
 
 Milestone 1 has exactly one definition of done, and it is executable:
@@ -70,8 +88,13 @@ go test -tags acceptance ./test/acceptance/... -v
 ```
 
 Start a run, let it get past its first tool call, `kill -9` the control plane, restart it. The run
-resumes from its last checkpoint and produces an identical result — and every step is executed
-exactly once across the interruption.
+resumes from its last checkpoint and produces an identical result, and every step whose output was
+already durable is replayed rather than re-executed.
+
+At most one step repeats: the one in flight when the process died has a durable record that it
+started and none that it finished, so the control plane cannot know whether its side effect
+happened and has to assume it did not. That is the at-least-once window, and closing it with
+idempotency keys is Milestone 6. The test asserts the bound rather than pretending it isn't there.
 
 ## License
 

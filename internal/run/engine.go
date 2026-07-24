@@ -44,6 +44,12 @@ func (e *Engine) Execute(ctx context.Context, r store.Run) error {
 	if err := e.store.MarkRunning(ctx, r.ID); err != nil {
 		return err
 	}
+	// Every attempt at a run appends its own start event, so the trajectory shows how many times
+	// the run was picked up and how much of it was already checkpointed at that moment.
+	started, _ := json.Marshal(map[string]int{"checkpointed_steps": r.StepCount})
+	if err := e.store.AppendEvent(ctx, r.ID, 0, "run_started", started); err != nil {
+		return err
+	}
 
 	agent := exec.CommandContext(ctx, e.agentCmd[0], e.agentCmd[1:]...)
 	agent.Env = append(os.Environ(),
@@ -172,6 +178,10 @@ func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.Age
 func (e *Engine) fail(ctx context.Context, runID string, cause error) error {
 	// The run failed for its own reasons; a failure to write that down is a different problem and
 	// should not replace the original error.
+	reason, _ := json.Marshal(cause.Error())
+	if err := e.store.AppendEvent(ctx, runID, 0, "run_failed", reason); err != nil {
+		e.log.Error("could not record run failure event", "run", runID, "err", err)
+	}
 	if err := e.store.FailRun(ctx, runID, cause.Error()); err != nil {
 		e.log.Error("could not record run failure", "run", runID, "err", err)
 	}

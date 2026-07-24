@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/slmatthiesen/bulkhead/internal/executor"
 	"github.com/slmatthiesen/bulkhead/internal/run"
 	"github.com/slmatthiesen/bulkhead/internal/store"
+	"github.com/slmatthiesen/bulkhead/internal/web"
 )
 
 func main() {
@@ -77,7 +79,7 @@ func serve(log *slog.Logger) error {
 	addr := envOr("BULKHEAD_ADDR", "127.0.0.1:8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           routes(db, queue, log),
+		Handler:           routes(ctx, db, queue, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	listenErr := make(chan error, 1)
@@ -123,8 +125,12 @@ func work(ctx context.Context, db *store.Store, engine *run.Engine, queue <-chan
 	}
 }
 
-func routes(db *store.Store, queue chan<- string, log *slog.Logger) http.Handler {
+// routes takes the process context so that open event streams end when the control plane is
+// shutting down; without it a stream would hold the graceful shutdown open until it timed out.
+func routes(ctx context.Context, db *store.Store, queue chan<- string, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
+
+	mux.Handle("GET /", web.Handler())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -176,7 +182,70 @@ func routes(db *store.Store, queue chan<- string, log *slog.Logger) http.Handler
 		})
 	})
 
+	// The trajectory is tailed by polling Postgres, because Postgres is where the durable record
+	// already is. Milestone 3 brings Redis and turns this into a subscription; a reader that
+	// reconnects still resumes from its last event id either way.
+	mux.HandleFunc("GET /runs/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		id := r.PathValue("id")
+		if _, err := db.GetRun(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "no such run", http.StatusNotFound)
+			return
+		}
+
+		after := lastEventID(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher.Flush()
+
+		poll := time.NewTicker(200 * time.Millisecond)
+		defer poll.Stop()
+		for {
+			events, err := db.EventsSince(r.Context(), id, after)
+			if err != nil {
+				if r.Context().Err() == nil {
+					log.Error("tail trajectory", "run", id, "err", err)
+				}
+				return
+			}
+			for _, e := range events {
+				payload, err := json.Marshal(e)
+				if err != nil {
+					log.Error("encode trajectory event", "run", id, "event", e.ID, "err", err)
+					return
+				}
+				// The event id is what the browser sends back as Last-Event-ID on reconnect.
+				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.ID, payload)
+				after = e.ID
+			}
+			flusher.Flush()
+
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ctx.Done():
+				return
+			case <-poll.C:
+			}
+		}
+	})
+
 	return mux
+}
+
+// lastEventID reports where a reconnecting reader left off: the SSE header the browser sets
+// automatically, or an explicit ?after= for anything that is not an EventSource.
+func lastEventID(r *http.Request) int64 {
+	for _, raw := range []string{r.Header.Get("Last-Event-ID"), r.URL.Query().Get("after")} {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return id
+		}
+	}
+	return 0
 }
 
 func newExecutor() (executor.Executor, error) {

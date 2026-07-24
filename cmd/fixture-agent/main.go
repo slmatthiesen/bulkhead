@@ -19,7 +19,9 @@ import (
 	"github.com/slmatthiesen/bulkhead/internal/protocol"
 )
 
-const stepCount = 6
+// Long enough that a kill lands in the middle of a run rather than near its start or end, which
+// is what makes the replayed prefix visible in the trajectory viewer.
+const stepCount = 12
 
 func main() {
 	if err := run(); err != nil {

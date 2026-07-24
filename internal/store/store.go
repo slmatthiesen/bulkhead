@@ -15,8 +15,10 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -179,6 +181,40 @@ func (s *Store) FailStep(ctx context.Context, runID string, seq int, message str
 		`update steps set status = 'failed', output = $3, completed_at = now()
 		 where run_id = $1 and seq = $2`,
 		runID, seq, payload)
+}
+
+// Event is one row of the append-only trajectory. Its json tags are the wire format the
+// trajectory viewer consumes.
+type Event struct {
+	ID         int64           `json:"id"`
+	Seq        int             `json:"seq"`
+	Kind       string          `json:"kind"`
+	Payload    json.RawMessage `json:"payload"`
+	RecordedAt time.Time       `json:"at"`
+}
+
+// EventsSince returns a run's trajectory events newer than the given id, oldest first. Callers
+// tail a run by passing back the last id they saw; the trajectory is append-only, so a reader
+// that reconnects after a control-plane death misses nothing.
+func (s *Store) EventsSince(ctx context.Context, runID string, after int64) ([]Event, error) {
+	rows, err := s.pool.Query(ctx,
+		`select id, seq, kind, payload, recorded_at from trajectory_events
+		 where run_id = $1 and id > $2 order by id`,
+		runID, after)
+	if err != nil {
+		return nil, fmt.Errorf("list trajectory events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.Seq, &e.Kind, &e.Payload, &e.RecordedAt); err != nil {
+			return nil, fmt.Errorf("scan trajectory event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 func (s *Store) AppendEvent(ctx context.Context, runID string, seq int, kind string, payload []byte) error {
