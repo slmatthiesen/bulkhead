@@ -1,7 +1,10 @@
 /bin/
 /dist/
-bulkheadd
-bulkheadd.exe
+# Built binaries, anchored to the repo root so they don't shadow cmd/bulkheadd/ source.
+/bulkheadd
+/bulkheadd.exe
+/fixture-agent
+/fixture-agent.exe
 *.exe
 
 .env
