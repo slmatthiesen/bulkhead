@@ -17,3 +17,6 @@ __pycache__/
 
 .idea/
 .vscode/
+
+# Private working notes (interview prep, career-related). Never ships — the repo is public.
+/notes/
