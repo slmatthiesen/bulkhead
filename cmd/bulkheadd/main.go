@@ -356,16 +356,27 @@ func newExecutor(log *slog.Logger, demo *supplychain.Store) (executor.Executor, 
 	byKind[supplychain.KindQuery] = demo.QueryExecutor()
 	byKind[supplychain.KindEmail] = demo.EmailExecutor()
 
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		log.Info("model steps unavailable", "reason", "ANTHROPIC_API_KEY is unset")
+	// BULKHEAD_LLM_API_KEY wins over ANTHROPIC_API_KEY so that pointing the harness at cheap
+	// inference for development does not mean unsetting a key the rest of the machine relies on.
+	apiKey := envOr("BULKHEAD_LLM_API_KEY", os.Getenv("ANTHROPIC_API_KEY"))
+	if apiKey == "" {
+		log.Info("model steps unavailable", "reason", "no BULKHEAD_LLM_API_KEY or ANTHROPIC_API_KEY")
 	} else {
 		maxTokens, err := strconv.ParseInt(envOr("BULKHEAD_LLM_MAX_TOKENS", "16000"), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("BULKHEAD_LLM_MAX_TOKENS: %w", err)
 		}
 		model := envOr("BULKHEAD_LLM_MODEL", "claude-opus-5")
-		byKind[executor.KindLLM] = executor.NewLLM(model, maxTokens)
-		log.Info("model steps enabled", "model", model, "max_tokens", maxTokens)
+		llm, err := executor.NewLLM(
+			os.Getenv("BULKHEAD_LLM_PROVIDER"),
+			os.Getenv("BULKHEAD_LLM_BASE_URL"),
+			apiKey, model, maxTokens,
+		)
+		if err != nil {
+			return nil, err
+		}
+		byKind[executor.KindLLM] = llm
+		log.Info("model steps enabled", "provider", llm.Provider(), "model", model, "max_tokens", maxTokens)
 	}
 
 	return executor.NewRouter(byKind), nil

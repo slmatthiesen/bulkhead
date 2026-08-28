@@ -100,7 +100,10 @@ func (s *session) explain(stock supplychain.QueryOutput) error {
 			"role":    "user",
 			"content": "These products are below their reorder threshold:\n" + strings.Join(lines, "\n") + "\n\nSummarise the situation for the purchasing team.",
 		}},
-		"max_tokens": 200,
+		// Generous, because the models this runs against reason before answering and a tight
+		// budget is spent entirely on reasoning -- the request succeeds and the text comes back
+		// empty, which looks like a bug and is not one.
+		"max_tokens": 2000,
 	}
 	var out struct {
 		Text string `json:"text"`

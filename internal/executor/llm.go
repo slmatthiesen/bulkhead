@@ -1,9 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -23,9 +28,9 @@ import (
 // restart.
 const KindLLM = "llm"
 
-// LLMInput is the payload of a KindLLM step. It is deliberately close to the wire shape of the
-// Messages API rather than an abstraction over it — an agent that wants to say something to the
-// model should not have to learn a second vocabulary first.
+// LLMInput is the payload of a KindLLM step. It is deliberately close to the wire shape of a chat
+// completion rather than an abstraction over it — an agent that wants to say something to a model
+// should not have to learn a second vocabulary first.
 type LLMInput struct {
 	System    string       `json:"system,omitempty"`
 	Messages  []LLMMessage `json:"messages"`
@@ -48,22 +53,56 @@ type LLMOutput struct {
 	OutputTokens int64 `json:"output_tokens"`
 }
 
-// LLM executes model calls against the Claude API.
+// provider is one way of turning a prompt into a completion.
+//
+// Two exist because development and the scored run want different things. Only resolve rate depends
+// on model quality — throughput, latency and the failure taxonomy are harness properties — so the
+// harness is developed against whatever inference is cheapest and pointed at a capable model once,
+// for the one number that warrants it. A provider that required the control plane to change would
+// defeat that.
+type provider interface {
+	Complete(ctx context.Context, in LLMInput, defaultModel string, maxTokens int64) (LLMOutput, error)
+	Name() string
+}
+
+// LLM executes model steps against whichever provider it was built with.
 type LLM struct {
-	client       anthropic.Client
+	provider     provider
 	defaultModel string
 	maxTokens    int64
 }
 
-// NewLLM builds an executor for model steps. The API key comes from the environment the way the
-// SDK expects, so nothing here handles a credential.
-func NewLLM(defaultModel string, maxTokens int64, opts ...option.RequestOption) *LLM {
-	return &LLM{
-		client:       anthropic.NewClient(opts...),
-		defaultModel: defaultModel,
-		maxTokens:    maxTokens,
+// NewLLM selects a provider by name. Anything OpenAI-compatible — Moonshot/Kimi, Together, vLLM,
+// Ollama, an OpenAI-compatible gateway — is the same provider with a different base URL.
+func NewLLM(providerName, baseURL, apiKey, defaultModel string, maxTokens int64) (*LLM, error) {
+	var p provider
+	switch providerName {
+	case "", "anthropic":
+		var opts []option.RequestOption
+		if apiKey != "" {
+			opts = append(opts, option.WithAPIKey(apiKey))
+		}
+		p = &anthropicProvider{client: anthropic.NewClient(opts...)}
+	case "openai-compatible":
+		if baseURL == "" {
+			return nil, fmt.Errorf("openai-compatible provider needs a base URL")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("openai-compatible provider needs an API key")
+		}
+		p = &openAICompatProvider{
+			baseURL: strings.TrimSuffix(baseURL, "/"),
+			apiKey:  apiKey,
+			http:    &http.Client{Timeout: 5 * time.Minute},
+		}
+	default:
+		return nil, fmt.Errorf("unknown LLM provider %q (have anthropic, openai-compatible)", providerName)
 	}
+	return &LLM{provider: p, defaultModel: defaultModel, maxTokens: maxTokens}, nil
 }
+
+// Provider reports which provider is in use, for the startup log.
+func (l *LLM) Provider() string { return l.provider.Name() }
 
 func (l *LLM) Execute(ctx context.Context, req Request) (json.RawMessage, error) {
 	if req.Kind != KindLLM {
@@ -77,6 +116,27 @@ func (l *LLM) Execute(ctx context.Context, req Request) (json.RawMessage, error)
 		return nil, fmt.Errorf("llm step has no messages")
 	}
 
+	// No retry loop here on purpose. A model call that fails is a failed step, and a failed step is
+	// already the control plane's problem to retry — adding a second retry policy inside the
+	// executor would mean two components backing off against each other.
+	out, err := l.provider.Complete(ctx, in, l.defaultModel, l.maxTokens)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
+}
+
+func (l *LLM) Close() error { return nil }
+
+// --- Anthropic ---
+
+type anthropicProvider struct {
+	client anthropic.Client
+}
+
+func (a *anthropicProvider) Name() string { return "anthropic" }
+
+func (a *anthropicProvider) Complete(ctx context.Context, in LLMInput, defaultModel string, maxTokens int64) (LLMOutput, error) {
 	messages := make([]anthropic.MessageParam, 0, len(in.Messages))
 	for i, m := range in.Messages {
 		block := anthropic.NewTextBlock(m.Content)
@@ -86,25 +146,22 @@ func (l *LLM) Execute(ctx context.Context, req Request) (json.RawMessage, error)
 		case "assistant":
 			messages = append(messages, anthropic.NewAssistantMessage(block))
 		default:
-			return nil, fmt.Errorf("llm message %d has unknown role %q", i, m.Role)
+			return LLMOutput{}, fmt.Errorf("llm message %d has unknown role %q", i, m.Role)
 		}
 	}
 
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(firstNonEmpty(in.Model, l.defaultModel)),
-		MaxTokens: firstNonZero(in.MaxTokens, l.maxTokens),
+		Model:     anthropic.Model(firstNonEmpty(in.Model, defaultModel)),
+		MaxTokens: firstNonZero(in.MaxTokens, maxTokens),
 		Messages:  messages,
 	}
 	if in.System != "" {
 		params.System = []anthropic.TextBlockParam{{Text: in.System}}
 	}
 
-	// No retry loop here on purpose. A model call that fails is a failed step, and a failed step is
-	// already the control plane's problem to retry — adding a second retry policy inside the
-	// executor would mean two components backing off against each other.
-	resp, err := l.client.Messages.New(ctx, params)
+	resp, err := a.client.Messages.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("messages: %w", err)
+		return LLMOutput{}, fmt.Errorf("messages: %w", err)
 	}
 
 	var text string
@@ -113,17 +170,99 @@ func (l *LLM) Execute(ctx context.Context, req Request) (json.RawMessage, error)
 			text += t.Text
 		}
 	}
-
-	return json.Marshal(LLMOutput{
+	return LLMOutput{
 		Text:         text,
 		StopReason:   string(resp.StopReason),
 		Model:        string(resp.Model),
 		InputTokens:  resp.Usage.InputTokens,
 		OutputTokens: resp.Usage.OutputTokens,
-	})
+	}, nil
 }
 
-func (l *LLM) Close() error { return nil }
+// --- OpenAI-compatible ---
+
+// openAICompatProvider speaks the chat-completions shape that most non-Anthropic vendors expose.
+//
+// Written against net/http rather than a vendor SDK deliberately: the whole value of this provider
+// is that one implementation serves every OpenAI-compatible endpoint, and pulling in a client
+// library per vendor would give that up for nothing.
+type openAICompatProvider struct {
+	baseURL string
+	apiKey  string
+	http    *http.Client
+}
+
+func (o *openAICompatProvider) Name() string { return "openai-compatible(" + o.baseURL + ")" }
+
+func (o *openAICompatProvider) Complete(ctx context.Context, in LLMInput, defaultModel string, maxTokens int64) (LLMOutput, error) {
+	// The system prompt is a message with role "system" here, not a separate top-level field the
+	// way Anthropic models it. That difference is the reason this interface exists.
+	messages := make([]LLMMessage, 0, len(in.Messages)+1)
+	if in.System != "" {
+		messages = append(messages, LLMMessage{Role: "system", Content: in.System})
+	}
+	messages = append(messages, in.Messages...)
+
+	body, err := json.Marshal(map[string]any{
+		"model":      firstNonEmpty(in.Model, defaultModel),
+		"max_tokens": firstNonZero(in.MaxTokens, maxTokens),
+		"messages":   messages,
+	})
+	if err != nil {
+		return LLMOutput{}, fmt.Errorf("encode chat request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return LLMOutput{}, fmt.Errorf("build chat request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+o.apiKey)
+
+	resp, err := o.http.Do(req)
+	if err != nil {
+		return LLMOutput{}, fmt.Errorf("chat request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return LLMOutput{}, fmt.Errorf("read chat response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// The body carries the vendor's error message and no credential, so it is safe and far more
+		// useful than the status line alone.
+		return LLMOutput{}, fmt.Errorf("chat completions returned %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+	}
+
+	var decoded struct {
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return LLMOutput{}, fmt.Errorf("decode chat response: %w", err)
+	}
+	if len(decoded.Choices) == 0 {
+		return LLMOutput{}, fmt.Errorf("chat completions returned no choices")
+	}
+
+	return LLMOutput{
+		Text:         decoded.Choices[0].Message.Content,
+		StopReason:   decoded.Choices[0].FinishReason,
+		Model:        decoded.Model,
+		InputTokens:  decoded.Usage.PromptTokens,
+		OutputTokens: decoded.Usage.CompletionTokens,
+	}, nil
+}
 
 func firstNonEmpty(chosen, fallback string) string {
 	if chosen != "" {
