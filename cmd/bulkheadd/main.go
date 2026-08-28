@@ -20,6 +20,7 @@ import (
 	"github.com/slmatthiesen/bulkhead/internal/executor"
 	"github.com/slmatthiesen/bulkhead/internal/run"
 	"github.com/slmatthiesen/bulkhead/internal/store"
+	"github.com/slmatthiesen/bulkhead/internal/trace"
 	"github.com/slmatthiesen/bulkhead/internal/web"
 )
 
@@ -34,6 +35,21 @@ func main() {
 func serve(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := trace.Setup(ctx, log)
+	if err != nil {
+		return err
+	}
+	// Spans are batched, so an unflushed exit loses the tail of the trajectory — the part that
+	// matters most, since it is what was in flight when the process went down. This gets its own
+	// context because ctx is already cancelled by the time the deferred call runs.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Error("could not flush traces", "err", err)
+		}
+	}()
 
 	db, err := store.Open(ctx, envOr("BULKHEAD_DATABASE_URL",
 		"postgres://bulkhead:bulkhead@127.0.0.1:5432/bulkhead?sslmode=disable"))

@@ -17,6 +17,7 @@ import (
 	"github.com/slmatthiesen/bulkhead/internal/executor"
 	"github.com/slmatthiesen/bulkhead/internal/protocol"
 	"github.com/slmatthiesen/bulkhead/internal/store"
+	"github.com/slmatthiesen/bulkhead/internal/trace"
 )
 
 // Engine executes runs. One Engine serves every run in the process; Milestone 1 runs them
@@ -39,8 +40,23 @@ func NewEngine(s *store.Store, e executor.Executor, agentCmd []string, log *slog
 // from Postgres without executing, so the agent walks back to the state it had when the process
 // died and then carries on. A resumed run and an uninterrupted run take the same path through
 // this function.
-func (e *Engine) Execute(ctx context.Context, r store.Run) error {
+func (e *Engine) Execute(ctx context.Context, r store.Run) (err error) {
 	log := e.log.With("run", r.ID, "instance", r.InstanceID)
+
+	// Every attempt at this run joins the same trace, because the trace id comes from the run id
+	// rather than being generated. A run killed mid-flight and resumed by a later process reads as
+	// one trajectory in the viewer instead of two unrelated ones.
+	ctx = trace.RunContext(ctx, r.ID)
+	ctx, span := trace.Start(ctx, "run.attempt",
+		trace.String("run.id", r.ID),
+		trace.String("bulkhead.instance_id", r.InstanceID),
+		trace.Int("run.checkpointed_steps", r.StepCount),
+	)
+	defer func() {
+		trace.Fail(span, err)
+		span.End()
+	}()
+
 	if err := e.store.MarkRunning(ctx, r.ID); err != nil {
 		return err
 	}
@@ -127,11 +143,23 @@ func (e *Engine) pump(ctx context.Context, r store.Run, stdin io.Writer, stdout 
 }
 
 // resolveStep answers one step request, either from a checkpoint or by actually executing it.
-func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.AgentMessage, log *slog.Logger) (protocol.StepResult, error) {
+func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.AgentMessage, log *slog.Logger) (_ protocol.StepResult, err error) {
+	// The replayed attribute is the whole point of tracing a step: it is how a reader tells the
+	// steps that were answered from Postgres from the ones that actually ran.
+	ctx, span := trace.Start(ctx, "step."+msg.Step,
+		trace.Int("step.seq", msg.Seq),
+		trace.String("step.kind", msg.Step),
+	)
+	defer func() {
+		trace.Fail(span, err)
+		span.End()
+	}()
+
 	if output, ok, err := e.store.CompletedStep(ctx, runID, msg.Seq); err != nil {
 		return protocol.StepResult{}, err
 	} else if ok {
 		log.Info("replaying checkpointed step", "seq", msg.Seq)
+		span.SetAttributes(trace.Bool("step.replayed", true))
 		if err := e.store.AppendEvent(ctx, runID, msg.Seq, "step_replayed", output); err != nil {
 			return protocol.StepResult{}, err
 		}
@@ -142,6 +170,7 @@ func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.Age
 			Replayed: true,
 		}, nil
 	}
+	span.SetAttributes(trace.Bool("step.replayed", false))
 
 	// Intent first, so that a process death between here and the checkpoint below is visible
 	// rather than silent.
