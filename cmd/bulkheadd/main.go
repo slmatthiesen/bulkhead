@@ -22,6 +22,7 @@ import (
 	"github.com/slmatthiesen/bulkhead/internal/store"
 	"github.com/slmatthiesen/bulkhead/internal/trace"
 	"github.com/slmatthiesen/bulkhead/internal/web"
+	"github.com/slmatthiesen/bulkhead/internal/workload/supplychain"
 )
 
 func main() {
@@ -58,7 +59,19 @@ func serve(log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	exec, err := newExecutor(log)
+	demo, err := supplychain.Open(ctx, envOr("BULKHEAD_DATABASE_URL",
+		"postgres://bulkhead:bulkhead@127.0.0.1:5432/bulkhead?sslmode=disable"))
+	if err != nil {
+		return err
+	}
+	defer demo.Close()
+	if delay, err := time.ParseDuration(envOr("BULKHEAD_DEMO_STEP_DELAY", "0s")); err != nil {
+		return fmt.Errorf("BULKHEAD_DEMO_STEP_DELAY: %w", err)
+	} else {
+		demo.StepDelay = delay
+	}
+
+	exec, err := newExecutor(log, demo)
 	if err != nil {
 		return err
 	}
@@ -95,7 +108,7 @@ func serve(log *slog.Logger) error {
 	addr := envOr("BULKHEAD_ADDR", "127.0.0.1:8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           routes(ctx, db, queue, log),
+		Handler:           routes(ctx, db, demo, queue, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	listenErr := make(chan error, 1)
@@ -143,7 +156,7 @@ func work(ctx context.Context, db *store.Store, engine *run.Engine, queue <-chan
 
 // routes takes the process context so that open event streams end when the control plane is
 // shutting down; without it a stream would hold the graceful shutdown open until it timed out.
-func routes(ctx context.Context, db *store.Store, queue chan<- string, log *slog.Logger) http.Handler {
+func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, queue chan<- string, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /", web.Handler())
@@ -250,6 +263,61 @@ func routes(ctx context.Context, db *store.Store, queue chan<- string, log *slog
 		}
 	})
 
+	// The kill button. os.Exit skips every deferred close, flush and shutdown, which is the point:
+	// a demo of crash recovery that shut down gracefully would be demonstrating nothing. The reply
+	// is flushed first so the browser learns the request succeeded before the process disappears.
+	mux.HandleFunc("POST /demo/kill", func(w http.ResponseWriter, _ *http.Request) {
+		log.Warn("kill requested from the demo console")
+		writeJSON(w, map[string]string{"status": "killing"})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			os.Exit(137) // what a SIGKILL looks like from the outside
+		}()
+	})
+
+	mux.HandleFunc("POST /demo/reseed", func(w http.ResponseWriter, r *http.Request) {
+		if err := demo.Reseed(r.Context()); err != nil {
+			log.Error("reseed", "err", err)
+			http.Error(w, "could not reseed", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "reseeded"})
+	})
+
+	mux.HandleFunc("GET /demo/inventory", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := demo.Inventory(r.Context())
+		if err != nil {
+			log.Error("inventory", "err", err)
+			http.Error(w, "could not read inventory", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, rows)
+	})
+
+	mux.HandleFunc("GET /demo/orders", func(w http.ResponseWriter, r *http.Request) {
+		orders, err := demo.Orders(r.Context())
+		if err != nil {
+			log.Error("orders", "err", err)
+			http.Error(w, "could not read orders", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, orders)
+	})
+
+	// The under-the-hood view: the checkpoint rows the replay actually reads from.
+	mux.HandleFunc("GET /runs/{id}/steps", func(w http.ResponseWriter, r *http.Request) {
+		steps, err := db.Steps(r.Context(), r.PathValue("id"))
+		if err != nil {
+			log.Error("steps", "err", err)
+			http.Error(w, "could not read steps", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, steps)
+	})
+
 	return mux
 }
 
@@ -271,7 +339,7 @@ func lastEventID(r *http.Request) int64 {
 // test exactly as it was — it drives a deterministic fixture agent that asks for commands only,
 // needs no API key, and costs nothing — while a run that asks for a model step without one fails
 // with a message naming the kinds that do exist.
-func newExecutor(log *slog.Logger) (executor.Executor, error) {
+func newExecutor(log *slog.Logger, demo *supplychain.Store) (executor.Executor, error) {
 	byKind := map[string]executor.Executor{}
 
 	switch kind := envOr("BULKHEAD_EXECUTOR", "fixture"); kind {
@@ -284,6 +352,9 @@ func newExecutor(log *slog.Logger) (executor.Executor, error) {
 	default:
 		return nil, fmt.Errorf("unknown BULKHEAD_EXECUTOR %q", kind)
 	}
+
+	byKind[supplychain.KindQuery] = demo.QueryExecutor()
+	byKind[supplychain.KindEmail] = demo.EmailExecutor()
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		log.Info("model steps unavailable", "reason", "ANTHROPIC_API_KEY is unset")

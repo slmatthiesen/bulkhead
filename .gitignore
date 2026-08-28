@@ -20,3 +20,6 @@ __pycache__/
 
 # Private working notes (interview prep, career-related). Never ships — the repo is public.
 /notes/
+
+# Built binaries
+bin/

@@ -244,3 +244,37 @@ func newID() (string, error) {
 func jsonString(s string) ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", s)), nil
 }
+
+// Step is one checkpoint row, as the under-the-hood view shows it.
+type Step struct {
+	Seq         int             `json:"seq"`
+	Kind        string          `json:"kind"`
+	Status      string          `json:"status"`
+	Input       json.RawMessage `json:"input"`
+	Output      json.RawMessage `json:"output,omitempty"`
+	StartedAt   time.Time       `json:"started_at"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+}
+
+// Steps returns a run's checkpoints in order. This is the table resume actually reads from, so
+// showing it is the difference between claiming the run was checkpointed and demonstrating it.
+func (s *Store) Steps(ctx context.Context, runID string) ([]Step, error) {
+	rows, err := s.pool.Query(ctx, `
+        select seq, kind, status, input, output, started_at, completed_at
+        from steps where run_id = $1 order by seq`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Step{}
+	for rows.Next() {
+		var st Step
+		if err := rows.Scan(&st.Seq, &st.Kind, &st.Status, &st.Input, &st.Output,
+			&st.StartedAt, &st.CompletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
