@@ -58,7 +58,7 @@ func serve(log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	exec, err := newExecutor()
+	exec, err := newExecutor(log)
 	if err != nil {
 		return err
 	}
@@ -264,17 +264,40 @@ func lastEventID(r *http.Request) int64 {
 	return 0
 }
 
-func newExecutor() (executor.Executor, error) {
+// newExecutor assembles the executor for each step kind the agent can ask for.
+//
+// Model steps are registered only when there is a credential to make them with. Leaving the kind
+// unregistered rather than constructing a client that will fail on first use keeps the acceptance
+// test exactly as it was — it drives a deterministic fixture agent that asks for commands only,
+// needs no API key, and costs nothing — while a run that asks for a model step without one fails
+// with a message naming the kinds that do exist.
+func newExecutor(log *slog.Logger) (executor.Executor, error) {
+	byKind := map[string]executor.Executor{}
+
 	switch kind := envOr("BULKHEAD_EXECUTOR", "fixture"); kind {
 	case "fixture":
 		delay, err := time.ParseDuration(envOr("BULKHEAD_FIXTURE_STEP_DELAY", "0s"))
 		if err != nil {
 			return nil, fmt.Errorf("BULKHEAD_FIXTURE_STEP_DELAY: %w", err)
 		}
-		return executor.NewFixture(os.Getenv("BULKHEAD_FIXTURE_LEDGER"), delay), nil
+		byKind[executor.KindCommand] = executor.NewFixture(os.Getenv("BULKHEAD_FIXTURE_LEDGER"), delay)
 	default:
 		return nil, fmt.Errorf("unknown BULKHEAD_EXECUTOR %q", kind)
 	}
+
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		log.Info("model steps unavailable", "reason", "ANTHROPIC_API_KEY is unset")
+	} else {
+		maxTokens, err := strconv.ParseInt(envOr("BULKHEAD_LLM_MAX_TOKENS", "16000"), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("BULKHEAD_LLM_MAX_TOKENS: %w", err)
+		}
+		model := envOr("BULKHEAD_LLM_MODEL", "claude-opus-5")
+		byKind[executor.KindLLM] = executor.NewLLM(model, maxTokens)
+		log.Info("model steps enabled", "model", model, "max_tokens", maxTokens)
+	}
+
+	return executor.NewRouter(byKind), nil
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {
