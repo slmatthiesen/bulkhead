@@ -22,6 +22,6 @@ while true; do
     code=$?
     # Three seconds, not one. The restart is not the interesting part -- the outage is, and a
     # blink too short for the console to notice is a blink too short for an audience to notice.
-    echo "supervisor: control plane exited ($code), restarting in 3s"
-    sleep 3
+    echo "supervisor: control plane exited ($code), restarting in 2s"
+    sleep 2
 done

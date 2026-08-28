@@ -1,6 +1,9 @@
 create table if not exists runs (
     id                  text primary key,
     instance_id         text not null,
+    -- What the operator actually asked. The agent puts it in front of the model, so the run is
+    -- answering a question rather than executing a script that happens to be scheduled.
+    question            text not null default '',
     state               text not null,
     result_patch        text not null default '',
     result_tests_passed boolean not null default false,
@@ -38,3 +41,7 @@ create table if not exists trajectory_events (
 );
 
 create index if not exists trajectory_events_run_idx on trajectory_events (run_id, id);
+
+-- Additive migrations. `create table if not exists` above does nothing to a database that already
+-- has the table, so a column added after the fact has to say so explicitly.
+alter table runs add column if not exists question text not null default '';

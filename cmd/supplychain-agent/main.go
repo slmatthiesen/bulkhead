@@ -94,11 +94,18 @@ func (s *session) explain(stock supplychain.QueryOutput) error {
 	for _, r := range stock.Rows {
 		lines = append(lines, fmt.Sprintf("%s: %d on hand, reorder below %d", r.Name, r.OnHand, r.ReorderThreshold))
 	}
+	// The operator's own words when there are any. A run that answers the question someone asked
+	// reads as an agent; the same run answering a hardcoded prompt reads as a scheduled job that
+	// happens to call a model.
+	ask := os.Getenv("BULKHEAD_QUESTION")
+	if strings.TrimSpace(ask) == "" {
+		ask = "Summarise the situation for the purchasing team."
+	}
 	input := map[string]any{
-		"system": "You are a warehouse operations assistant. Answer in one sentence, no preamble.",
+		"system": "You are a warehouse operations assistant. Answer the question in two sentences at most, no preamble. Ground every claim in the stock figures you are given.",
 		"messages": []map[string]string{{
 			"role":    "user",
-			"content": "These products are below their reorder threshold:\n" + strings.Join(lines, "\n") + "\n\nSummarise the situation for the purchasing team.",
+			"content": "Current stock below reorder threshold:\n" + strings.Join(lines, "\n") + "\n\n" + ask,
 		}},
 		// Generous, because the models this runs against reason before answering and a tight
 		// budget is spent entirely on reasoning -- the request succeeds and the text comes back

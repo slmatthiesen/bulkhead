@@ -5,14 +5,16 @@
   :root {
     --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --dim: #8b949e;
     --ok: #3fb950; --replayed: #8957e5; --failed: #da3633; --warn: #d29922; --accent: #58a6ff;
+    /* AWS service category colours, so the diagram reads to anyone who has seen an AWS console. */
+    --aws-integration: #e7157b; --aws-database: #527fff; --aws-compute: #ed7100; --aws-ai: #01a88d;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px;
            border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-  h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
   h1 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
   nav { display: flex; gap: 4px; margin-left: 8px; }
   nav button, .actions button {
@@ -27,23 +29,39 @@
   button:disabled { opacity: .4; cursor: not-allowed; }
 
   .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-family: var(--mono);
-          padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); }
+          padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
   .pill.up .dot { background: var(--ok); }
   .pill.down .dot { background: var(--failed); }
   .pill.down { border-color: #7d2725; color: #ff9492; }
 
-  main { padding: 22px; max-width: 1080px; margin: 0 auto; }
-  .hint { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+  main { padding: 18px 20px; max-width: 1400px; margin: 0 auto; }
+
+  form#ask { display: flex; gap: 8px; margin-bottom: 16px; }
+  form#ask input {
+    flex: 1; font: inherit; padding: 11px 14px; border-radius: 8px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  }
+  form#ask input:focus { outline: none; border-color: var(--accent); }
+  form#ask button {
+    font: inherit; font-weight: 600; padding: 11px 20px; border-radius: 8px; cursor: pointer;
+    background: var(--accent); color: #04131f; border: 1px solid var(--accent);
+  }
+  .asked { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin-bottom: 14px; }
+  .asked span { display: block; color: var(--dim); font-size: 12px; text-transform: uppercase;
+                letter-spacing: .05em; margin-bottom: 3px; }
+
+  .split { display: grid; grid-template-columns: 1fr 440px; gap: 16px; align-items: start; }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
 
   .step { border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px;
-          padding: 13px 16px; margin-bottom: 10px; background: var(--panel); }
+          padding: 12px 15px; margin-bottom: 9px; background: var(--panel); }
   .step .top { display: flex; align-items: baseline; gap: 10px; }
   .step .n { font-family: var(--mono); font-size: 12px; color: var(--dim); }
   .step .title { font-weight: 600; }
   .step .detail { color: var(--dim); font-size: 14px; margin-top: 5px; white-space: pre-wrap; }
   .step .quote { border-left: 2px solid var(--line); padding-left: 12px; margin-top: 8px;
-                 color: var(--text); font-size: 14px; font-style: italic; }
+                 font-size: 14px; font-style: italic; }
   .badge { margin-left: auto; font-size: 11px; font-family: var(--mono); padding: 3px 8px;
            border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
   .step.started { border-left-color: var(--warn); }
@@ -51,12 +69,26 @@
   .step.replayed { border-left-color: var(--replayed); border-style: dashed; }
   .step.replayed .badge { border-color: var(--replayed); color: #c297ff; }
   .step.failed { border-left-color: var(--failed); }
+  .step.dup { border-left-color: var(--warn); }
   .step.dup .badge { border-color: var(--warn); color: #e3b341; }
 
-  .banner { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+  .banner { border: 1px solid var(--line); border-radius: 8px; padding: 11px 15px; margin-bottom: 14px;
             background: #1c2128; font-size: 14px; }
   .banner.crash { border-color: #7d2725; color: #ff9492; }
   .banner.resumed { border-color: var(--replayed); color: #c297ff; }
+
+  aside.logs { border: 1px solid var(--line); border-radius: 8px; background: #010409;
+               position: sticky; top: 16px; overflow: hidden; }
+  aside.logs h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                  color: var(--dim); padding: 9px 13px; border-bottom: 1px solid var(--line);
+                  background: var(--panel); display: flex; align-items: center; gap: 8px; }
+  #log { height: 520px; overflow-y: auto; padding: 9px 13px; font-family: var(--mono);
+         font-size: 11.5px; line-height: 1.65; }
+  #log div { white-space: pre-wrap; word-break: break-word; }
+  #log .t { color: #6e7681; }
+  #log .INFO { color: #adbac7; } #log .WARN { color: #e3b341; } #log .ERROR { color: #ff9492; }
+  #log .dead { color: #ff9492; font-weight: 600; }
+  #log .live { color: var(--ok); font-weight: 600; }
 
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -65,24 +97,16 @@
   .low { color: #ff9492; font-weight: 600; }
   .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
            padding: 16px 18px; margin-bottom: 18px; }
-  .panel h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .02em; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; }
   .panel h2 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
-  pre { font-family: var(--mono); font-size: 12px; color: var(--dim); overflow-x: auto;
-        background: #0d1117; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 0; }
-
-  .layer { display: grid; grid-template-columns: 190px 1fr 1fr; gap: 0; align-items: stretch;
-           border-bottom: 1px solid var(--line); }
-  .layer:last-child { border-bottom: none; }
-  .layer > div { padding: 13px 14px; }
-  .layer .what { font-weight: 600; border-right: 1px solid var(--line); }
-  .layer .what span { display: block; font-weight: 400; font-size: 12px; color: var(--dim); margin-top: 3px; }
-  .layer .now { color: var(--dim); font-size: 13px; border-right: 1px solid var(--line); font-family: var(--mono); }
-  .layer .prod { font-size: 13px; }
-  .layer .prod b { color: var(--accent); font-weight: 600; }
-  .layerhead { display: grid; grid-template-columns: 190px 1fr 1fr; border-bottom: 1px solid var(--line);
-               font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
-  .layerhead > div { padding: 8px 14px; }
+  .callout { border: 1px solid var(--warn); border-radius: 8px; padding: 13px 16px;
+             background: #1c1810; font-size: 14px; }
+  .callout b { color: #e3b341; }
   .hide { display: none; }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  svg .lbl { fill: #e6edf3; font-size: 13px; font-weight: 600; }
+  svg .sub { fill: #8b949e; font-size: 10.5px; }
+  svg .edge { fill: #8b949e; font-size: 11px; }
 </style>
 
 <header>
@@ -93,20 +117,31 @@
     <button data-tab="arch">Architecture</button>
   </nav>
   <div class="actions">
+    <span id="qdepth" class="pill">queue</span>
     <span id="health" class="pill"><span class="dot"></span><span id="healthtext">checking</span></span>
     <button id="reseed">Reseed</button>
-    <button id="start">Start run</button>
     <button id="kill" class="danger">Kill control plane</button>
   </div>
 </header>
 
 <main>
   <section id="tab-run">
-    <p class="hint">Stock is checked, the shortfall is assessed, and a purchase order goes to each vendor.
-      Kill the control plane mid-run: it restarts, replays what it already did, and finishes — without
-      ordering twice.</p>
-    <div id="banner"></div>
-    <div id="steps"></div>
+    <form id="ask">
+      <input id="question" autocomplete="off"
+             value="Which vitamins are we going to run out of before the end of the week?">
+      <button type="submit">Ask</button>
+    </form>
+    <div class="split">
+      <div>
+        <div id="asked"></div>
+        <div id="banner"></div>
+        <div id="steps"></div>
+      </div>
+      <aside class="logs">
+        <h3><span class="dot" id="logdot"></span> control plane · live log</h3>
+        <div id="log"></div>
+      </aside>
+    </div>
   </section>
 
   <section id="tab-hood" class="hide">
@@ -132,65 +167,124 @@
 
   <section id="tab-arch" class="hide">
     <div class="panel">
-      <h2>What runs where</h2>
-      <p class="hint" style="margin-bottom:16px">Every layer is behind an interface. The middle column is
-        what this laptop is running right now; the right column is what it becomes in your environment,
-        without the control plane changing.</p>
-      <div class="layerhead"><div>layer</div><div>on this laptop</div><div>in your environment</div></div>
+      <h2>One path in <small>every run arrives the same way, new or retried</small></h2>
+      <svg viewBox="0 0 1140 430" style="width:100%;height:auto">
+        <defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+          </marker>
+          <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+          </marker>
+          <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#8957e5"/>
+          </marker>
+        </defs>
 
-      <div class="layer">
-        <div class="what">Agent<span>decides what to do</span></div>
-        <div class="now">a local subprocess,<br>NDJSON over pipes</div>
-        <div class="prod">The same process inside a <b>sandboxed container</b> — gVisor or a Firecracker
-          microVM when the agent runs untrusted code. The boundary is already a pipe, so the agent does
-          not know which it is.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Checkpoints<span>how a run survives a crash</span></div>
-        <div class="now">Postgres in Docker,<br>localhost:5432</div>
-        <div class="prod"><b>Your RDS instance.</b> One connection string. Nothing else changes — the
-          schema, the write ordering and the replay logic are identical.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Dispatch<span>how work reaches a worker</span></div>
-        <div class="now">an in-process<br>Go channel</div>
-        <div class="prod"><b>SQS</b>, Redis Streams, or Kafka. The lease-and-redeliver semantics the
-          channel fakes are what SQS visibility timeouts give you for real.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Compute<span>what runs the workers</span></div>
-        <div class="now">one process,<br>runs serially</div>
-        <div class="prod"><b>ECS or EKS</b>, scaled on queue depth with KEDA. Workers are stateless
-          because all durable state is in the checkpoint store.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Model<span>the reasoning step</span></div>
-        <div class="now">Moonshot / Kimi<br>over an OpenAI-compatible API</div>
-        <div class="prod"><b>Bedrock</b>, Vertex, or Anthropic directly. Selected by config, because
-          only answer quality depends on the model — throughput and failure behaviour do not.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Side effect<span>the thing that costs money</span></div>
-        <div class="now">a row in a<br>purchase_orders table</div>
-        <div class="prod">Your <b>ERP, SendGrid, or vendor EDI</b>. The idempotency key that stops a
-          double-send here is the one you would pass to their API.</div>
-      </div>
-      <div class="layer">
-        <div class="what">Traces<span>what the agent did, and when</span></div>
-        <div class="now">OpenTelemetry spans,<br>exporter off by default</div>
-        <div class="prod"><b>Langfuse</b>, self-hosted or cloud — or any OTLP collector. One
-          environment variable; no vendor is named in the code.</div>
+        <rect x="12" y="176" width="132" height="60" rx="9" fill="#161b22" stroke="#30363d"/>
+        <text class="lbl" x="78" y="200" text-anchor="middle">Operator</text>
+        <text class="sub" x="78" y="218" text-anchor="middle">asks a question</text>
+
+        <path d="M148 206 H206" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+        <rect x="212" y="176" width="126" height="60" rx="9" fill="#161b22" stroke="#30363d"/>
+        <text class="lbl" x="275" y="200" text-anchor="middle">API</text>
+        <text class="sub" x="275" y="218" text-anchor="middle">POST /runs</text>
+
+        <path d="M342 206 H402" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+        <text class="edge" x="372" y="197" text-anchor="middle">enqueue</text>
+
+        <rect x="408" y="166" width="150" height="80" rx="9" fill="#2a0f1e" stroke="#e7157b" stroke-width="1.8"/>
+        <rect x="424" y="182" width="17" height="17" rx="3" fill="#e7157b"/>
+        <text class="lbl" x="450" y="196">Queue</text>
+        <text class="sub" x="424" y="219">leased · at-least-once</text>
+        <text class="sub" x="424" y="234" fill="#e7157b">Amazon SQS</text>
+
+        <path d="M562 206 H622" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+        <text class="edge" x="592" y="197" text-anchor="middle">claim</text>
+
+        <rect x="628" y="166" width="150" height="80" rx="9" fill="#2a1608" stroke="#ed7100" stroke-width="1.8"/>
+        <rect x="644" y="182" width="17" height="17" rx="3" fill="#ed7100"/>
+        <text class="lbl" x="670" y="196">Worker</text>
+        <text class="sub" x="644" y="219">stateless · scales on depth</text>
+        <text class="sub" x="644" y="234" fill="#ed7100">ECS / EKS + KEDA</text>
+
+        <path d="M700 250 V286 H486 V250" stroke="#d29922" stroke-width="1.6" fill="none"
+              stroke-dasharray="5 4" marker-end="url(#aw)"/>
+        <text class="edge" x="593" y="305" text-anchor="middle" fill="#d29922">
+          worker dies → lease expires → the same message is delivered again
+        </text>
+        <text class="edge" x="593" y="322" text-anchor="middle" fill="#6e7681">
+          recovery is not a second path; it is redelivery
+        </text>
+
+        <rect x="628" y="44" width="150" height="80" rx="9" fill="#101a33" stroke="#527fff" stroke-width="1.8"/>
+        <rect x="644" y="60" width="17" height="17" rx="3" fill="#527fff"/>
+        <text class="lbl" x="670" y="74">Checkpoints</text>
+        <text class="sub" x="644" y="97">every step, before it runs</text>
+        <text class="sub" x="644" y="112" fill="#527fff">Amazon RDS</text>
+
+        <path d="M688 166 V128" stroke="#8957e5" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+        <path d="M720 128 V164" stroke="#8957e5" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+        <text class="edge" x="500" y="146" fill="#c297ff">write intent, then replay on resume</text>
+
+        <rect x="852" y="44" width="150" height="80" rx="9" fill="#062822" stroke="#01a88d" stroke-width="1.8"/>
+        <rect x="868" y="60" width="17" height="17" rx="3" fill="#01a88d"/>
+        <text class="lbl" x="894" y="74">Model</text>
+        <text class="sub" x="868" y="97">a step, so it replays free</text>
+        <text class="sub" x="868" y="112" fill="#01a88d">Bedrock / Kimi</text>
+        <path d="M782 130 L850 100" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+        <rect x="852" y="166" width="150" height="80" rx="9" fill="#1c1810" stroke="#d29922" stroke-width="1.8"/>
+        <rect x="868" y="182" width="17" height="17" rx="3" fill="#d29922"/>
+        <text class="lbl" x="894" y="196">Purchase order</text>
+        <text class="sub" x="868" y="219">carries an idempotency key</text>
+        <text class="sub" x="868" y="234" fill="#d29922">your ERP / SES</text>
+        <path d="M782 206 H848" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+        <text class="edge" x="815" y="197" text-anchor="middle">send</text>
+
+        <text class="edge" x="927" y="268" text-anchor="middle" fill="#e3b341">the only step that costs money</text>
+        <text class="edge" x="927" y="285" text-anchor="middle" fill="#6e7681">delivered twice, ordered once</text>
+
+        <rect x="212" y="348" width="566" height="56" rx="9" fill="#161b22" stroke="#30363d" stroke-dasharray="4 4"/>
+        <text class="lbl" x="232" y="371">Traces — OpenTelemetry → Langfuse, or any OTLP collector</text>
+        <text class="sub" x="232" y="390">one trace per run, spanning every restart, because the trace id is derived from the run id</text>
+      </svg>
+    </div>
+
+    <div class="panel">
+      <h2>Why duplicates are assumed rather than prevented</h2>
+      <div class="callout">
+        Exactly-once delivery is not available to anything that talks over a network, so nothing here
+        claims it. The queue delivers <b>at least once</b>, and a second delivery is made harmless three
+        ways: a step is written down <b>before</b> it runs, a step that already completed is
+        <b>replayed</b> from its checkpoint instead of re-executed, and the one step with an effect in
+        the world carries an <b>idempotency key</b> the receiving system can recognise. Kill the control
+        plane mid-send and the vendor still receives exactly one purchase order.
       </div>
     </div>
 
     <div class="panel">
-      <h2>Why the reasoning step is checkpointed too</h2>
-      <p style="margin:0 0 10px">A resumed agent must reach the state it was in. If it re-ran its model
-        call it would sample a different answer, ask for different steps, and replay by step number
-        would stop meaning anything — so model calls go through the control plane like every other
-        step, and a resumed run is handed back the tokens it saw the first time.</p>
-      <p style="margin:0; color:var(--dim); font-size:14px">It is also why a crash costs nothing:
-        the model is not billed twice.</p>
+      <h2>What runs where</h2>
+      <table>
+        <thead><tr><th>layer</th><th>on this laptop</th><th>in your environment</th></tr></thead>
+        <tbody>
+          <tr><td><b>Queue</b></td><td class="mono">Postgres,<br>FOR UPDATE SKIP LOCKED</td>
+              <td><b style="color:#e7157b">Amazon SQS</b> — a visibility timeout is the same lease, and SKIP LOCKED is what the broker does for you</td></tr>
+          <tr><td><b>Checkpoints</b></td><td class="mono">Postgres in Docker,<br>localhost:5432</td>
+              <td><b style="color:#527fff">Amazon RDS</b> — one connection string; the schema, the write ordering and the replay logic are unchanged</td></tr>
+          <tr><td><b>Workers</b></td><td class="mono">one process, serial</td>
+              <td><b style="color:#ed7100">ECS or EKS</b>, scaled on queue depth with KEDA; workers are stateless because all durable state is in the checkpoint store</td></tr>
+          <tr><td><b>Agent sandbox</b></td><td class="mono">local subprocess,<br>NDJSON over pipes</td>
+              <td>A container, gVisor, or a Firecracker microVM once the agent runs untrusted code — the boundary is already a pipe, so the agent cannot tell</td></tr>
+          <tr><td><b>Model</b></td><td class="mono">Kimi, OpenAI-compatible API</td>
+              <td><b style="color:#01a88d">Bedrock</b>, Vertex, or Anthropic directly — selected by config, because only answer quality depends on it</td></tr>
+          <tr><td><b>Side effect</b></td><td class="mono">a row in purchase_orders</td>
+              <td>Your ERP, SES, or vendor EDI — the idempotency key used here is the one you would pass to their API</td></tr>
+          <tr><td><b>Traces</b></td><td class="mono">OTLP exporter, off by default</td>
+              <td>Langfuse, self-hosted or cloud, or any OTLP collector — one environment variable</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 </main>
@@ -198,39 +292,46 @@
 <script>
 const $ = s => document.querySelector(s);
 let runId = location.hash.slice(1) || null;
-let source = null, seen = new Set(), sawCrash = false;
+let source = null, logSource = null, seen = new Set(), sawCrash = false, logWasDown = false;
 
-// --- tabs ---
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   for (const t of ['run', 'hood', 'arch']) $('#tab-' + t).classList.toggle('hide', t !== b.dataset.tab);
   if (b.dataset.tab === 'hood') refreshHood();
 });
 
-// --- health, and the reconnect that makes a crash self-healing ---
-// The kill button ends the process. A supervisor restarts it, the restarted process finds the run
-// that was in flight and resumes it, and this poll is what notices and re-attaches the stream. No
-// resume button, because nothing needs to be asked for.
+function banner(kind, text) { $('#banner').innerHTML = '<div class="banner ' + kind + '">' + text + '</div>'; }
+
+// The loop that notices the process died. Its reschedule lives in `finally` because it runs
+// precisely when things are going wrong, and a poll that throws once and stops rescheduling leaves
+// the page frozen on a green pill while the process is gone.
 async function pollHealth() {
-  // The whole body is guarded and the reschedule is in `finally`, because this loop is the only
-  // thing that notices the control plane died -- and it runs precisely when things are going
-  // wrong. A poll that throws once and silently stops rescheduling leaves the page frozen on a
-  // green "up" pill while the process is gone, which is worse than having no indicator at all.
   try {
     let up = false;
     try { up = (await fetch('/healthz', {cache: 'no-store'})).ok; } catch {}
 
     $('#health').className = 'pill ' + (up ? 'up' : 'down');
     $('#healthtext').textContent = up ? 'control plane up' : 'control plane down';
-    for (const id of ['reseed', 'start', 'kill']) $('#' + id).disabled = !up;
+    $('#logdot').style.background = up ? 'var(--ok)' : 'var(--failed)';
+    for (const id of ['reseed', 'kill']) $('#' + id).disabled = !up;
 
     if (!up) {
+      if (!logWasDown) { logWasDown = true; logLine('dead', '— control plane died; the supervisor will restart it —'); }
       sawCrash = true;
-      banner('crash', 'Control plane is down. The supervisor will restart it, and the run resumes from its last checkpoint.');
+      banner('crash', 'Control plane is down. The message it was holding stays in the queue; when the lease expires the run is delivered again.');
     } else if (sawCrash) {
-      sawCrash = false;
-      banner('resumed', 'Control plane restarted. Steps it had already completed are replayed from Postgres rather than executed again.');
+      sawCrash = false; logWasDown = false;
+      banner('resumed', 'Restarted and claimed the run back. Steps that had already completed are replayed from Postgres rather than executed again.');
+      logLine('live', '— control plane back —');
+      tailLogs();
       if (runId) subscribe(runId);
+    }
+
+    if (up) {
+      try {
+        const d = await (await fetch('/queue', {cache: 'no-store'})).json();
+        $('#qdepth').textContent = 'queue ' + d.waiting + ' waiting · ' + d.leased + ' leased';
+      } catch {}
     }
   } catch (e) {
     console.error('health poll', e);
@@ -238,55 +339,85 @@ async function pollHealth() {
     setTimeout(pollHealth, 400);
   }
 }
-function banner(kind, text) { $('#banner').innerHTML = `<div class="banner ${kind}">${text}</div>`; }
 
-// --- actions ---
+function logLine(cls, text, at) {
+  const el = document.createElement('div');
+  const time = document.createElement('span');
+  time.className = 't';
+  time.textContent = at || '';
+  const body = document.createElement('span');
+  body.className = cls;
+  body.textContent = ' ' + text;
+  el.append(time, body);
+  const box = $('#log');
+  box.appendChild(el);
+  while (box.children.length > 400) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+
+function tailLogs() {
+  if (logSource) logSource.close();
+  logSource = new EventSource('/logs');
+  logSource.onmessage = e => { const l = JSON.parse(e.data); logLine(l.level, l.text, l.at); };
+}
+
 $('#reseed').onclick = async () => {
   await fetch('/demo/reseed', {method: 'POST'});
-  $('#steps').innerHTML = ''; $('#banner').innerHTML = ''; seen.clear();
-  runId = null; location.hash = ''; refreshHood();
+  $('#steps').innerHTML = ''; $('#banner').innerHTML = ''; $('#asked').innerHTML = '';
+  seen.clear(); runId = null; location.hash = ''; refreshHood();
 };
 $('#kill').onclick = () => fetch('/demo/kill', {method: 'POST'}).catch(() => {});
-$('#start').onclick = async () => {
+
+$('#ask').onsubmit = async e => {
+  e.preventDefault();
+  const question = $('#question').value.trim();
   const r = await fetch('/runs', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({instance_id: 'warehouse-restock'}),
+    body: JSON.stringify({instance_id: 'warehouse-restock', question: question}),
   });
-  const {id} = await r.json();
+  const created = await r.json();
   $('#steps').innerHTML = ''; $('#banner').innerHTML = ''; seen.clear();
-  runId = id; location.hash = id; subscribe(id);
+
+  const box = document.createElement('div');
+  box.className = 'asked';
+  const label = document.createElement('span');
+  label.textContent = 'asked';
+  box.append(label, document.createTextNode(question));
+  $('#asked').replaceChildren(box);
+
+  runId = created.id; location.hash = created.id; subscribe(created.id);
 };
 
-// --- the run view ---
 function subscribe(id) {
   if (source) source.close();
-  source = new EventSource(`/runs/${id}/events`);
+  source = new EventSource('/runs/' + id + '/events');
   source.onmessage = e => { render(JSON.parse(e.data)); refreshHoodSoon(); };
 }
 
-// Turning a step into a sentence. The kind and the payload carry everything needed; the point of
-// this function is that an audience should not have to read JSON to follow what the agent did.
+// Turning a step into a sentence. The point is that nobody should have to read JSON to follow what
+// the agent did.
 function describe(ev) {
   const p = ev.payload || {};
   switch (ev.kind) {
     case 'run_started':
       return p.checkpointed_steps
-        ? {t: 'Picked the run back up', d: `${p.checkpointed_steps} step(s) already checkpointed — replaying them.`}
+        ? {t: 'Picked the run back up', d: p.checkpointed_steps + ' step(s) already checkpointed — replaying them.'}
         : {t: 'Started', d: 'Checking the warehouse.'};
     case 'run_finished': return {t: 'Done', d: p.patch || ''};
     case 'run_failed':   return {t: 'Failed', d: String(p)};
   }
   if (ev.kind === 'step_started') {
     if (p.query) return {t: 'Checking inventory', d: 'Looking for products below their reorder threshold.'};
-    if (p.messages) return {t: 'Assessing the shortfall', d: 'Asking the model to summarise the situation.'};
-    if (p.vendor_id) return {t: `Sending a purchase order to ${p.vendor_id}`, d: (p.line_items || []).map(i => `${i.name} ×${i.quantity}`).join('\n')};
+    if (p.messages) return {t: 'Working out the answer', d: 'Asking the model, grounded in the stock figures.'};
+    if (p.vendor_id) return {t: 'Sending a purchase order to ' + p.vendor_id,
+                             d: (p.line_items || []).map(i => i.name + ' ×' + i.quantity).join('\n')};
   }
-  if (p.count !== undefined) return {t: 'Checked inventory', d: `${p.count} product(s) below reorder threshold.`};
-  if (p.text !== undefined) return {t: 'Assessed the shortfall', d: '', q: p.text};
+  if (p.count !== undefined) return {t: 'Checked inventory', d: p.count + ' product(s) below reorder threshold.'};
+  if (p.text !== undefined) return {t: 'Answer', d: '', q: p.text};
   if (p.purchase_order_id !== undefined) {
     return {
       t: p.duplicate ? 'Already ordered — not sent again' : 'Purchase order sent',
-      d: `${p.vendor_email} · $${(p.total_cents / 100).toFixed(2)}` +
+      d: p.vendor_email + ' · $' + (p.total_cents / 100).toFixed(2) +
          (p.duplicate ? '\nThis step was interrupted mid-send. On retry the idempotency key matched an order that already existed, so nothing was sent twice.' : ''),
       dup: !!p.duplicate,
     };
@@ -299,12 +430,10 @@ function render(ev) {
   seen.add(ev.id);
   const info = describe(ev);
 
-  // A completed step supersedes its own started card rather than stacking beneath it.
-  const key = `${ev.seq}`;
-  let el = ev.seq ? document.querySelector(`.step[data-seq="${key}"]`) : null;
+  let el = ev.seq ? document.querySelector('.step[data-seq="' + ev.seq + '"]') : null;
   if (!el || !ev.seq) {
     el = document.createElement('div');
-    if (ev.seq) el.dataset.seq = key;
+    if (ev.seq) el.dataset.seq = ev.seq;
     $('#steps').appendChild(el);
   }
   const state = ev.kind === 'step_replayed' ? 'replayed'
@@ -314,52 +443,72 @@ function render(ev) {
   const badge = ev.kind === 'step_replayed' ? 'replayed from checkpoint'
               : info.dup ? 'idempotency key matched'
               : ev.kind === 'step_started' ? 'running' : '';
-  el.innerHTML =
-    `<div class="top">${ev.seq ? `<span class="n">${ev.seq}</span>` : ''}` +
-    `<span class="title"></span>${badge ? `<span class="badge">${badge}</span>` : ''}</div>` +
-    (info.d ? `<div class="detail"></div>` : '') +
-    (info.q ? `<div class="quote"></div>` : '');
-  el.querySelector('.title').textContent = info.t;
-  if (info.d) el.querySelector('.detail').textContent = info.d;
-  if (info.q) el.querySelector('.quote').textContent = info.q;
-  window.scrollTo(0, document.body.scrollHeight);
+
+  el.replaceChildren();
+  const top = document.createElement('div');
+  top.className = 'top';
+  if (ev.seq) {
+    const n = document.createElement('span');
+    n.className = 'n'; n.textContent = ev.seq;
+    top.appendChild(n);
+  }
+  const title = document.createElement('span');
+  title.className = 'title'; title.textContent = info.t;
+  top.appendChild(title);
+  if (badge) {
+    const b = document.createElement('span');
+    b.className = 'badge'; b.textContent = badge;
+    top.appendChild(b);
+  }
+  el.appendChild(top);
+  if (info.d) {
+    const d = document.createElement('div');
+    d.className = 'detail'; d.textContent = info.d;
+    el.appendChild(d);
+  }
+  if (info.q) {
+    const q = document.createElement('div');
+    q.className = 'quote'; q.textContent = info.q;
+    el.appendChild(q);
+  }
 }
 
-// --- under the hood ---
 let hoodTimer = null;
 function refreshHoodSoon() { clearTimeout(hoodTimer); hoodTimer = setTimeout(refreshHood, 400); }
 async function refreshHood() {
-  const cell = (v, cls) => `<td${cls ? ` class="${cls}"` : ''}>${v}</td>`;
+  const cell = (v, cls) => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
   try {
     const stock = await (await fetch('/demo/inventory')).json();
     $('#hoodstock').innerHTML = stock.map(r => {
       const low = r.on_hand < r.reorder_threshold;
-      return `<tr>${cell(r.name, low ? 'low' : '')}${cell(r.on_hand, 'mono')}${cell(r.reorder_threshold, 'mono')}${cell(r.vendor_name)}</tr>`;
+      return '<tr>' + cell(r.name, low ? 'low' : '') + cell(r.on_hand, 'mono') +
+             cell(r.reorder_threshold, 'mono') + cell(r.vendor_name) + '</tr>';
     }).join('');
 
     const orders = await (await fetch('/demo/orders')).json();
     $('#hoodorders').innerHTML = orders.length
       ? orders.map(o => '<tr>' + cell('#' + o.id, 'mono') + cell(o.vendor_email) +
-          cell((o.line_items || []).map(i => `${i.sku} ×${i.quantity}`).join('<br>')) +
+          cell((o.line_items || []).map(i => i.sku + ' ×' + i.quantity).join('<br>')) +
           cell('$' + (o.total_cents / 100).toFixed(2), 'mono') + '</tr>').join('')
-      : `<tr><td colspan="4" style="color:var(--dim)">nothing sent yet</td></tr>`;
+      : '<tr><td colspan="4" style="color:var(--dim)">nothing sent yet</td></tr>';
 
     if (runId) {
-      const steps = await (await fetch(`/runs/${runId}/steps`)).json();
+      const steps = await (await fetch('/runs/' + runId + '/steps')).json();
       $('#hoodsteps').innerHTML = steps.map(s => {
         const o = s.output || {};
         let summary = '';
-        if (o.count !== undefined) summary = `${o.count} rows`;
-        else if (o.text !== undefined) summary = `${o.input_tokens}/${o.output_tokens} tokens`;
-        else if (o.purchase_order_id !== undefined) summary = `PO #${o.purchase_order_id}${o.duplicate ? ' (duplicate suppressed)' : ''}`;
+        if (o.count !== undefined) summary = o.count + ' rows';
+        else if (o.text !== undefined) summary = o.input_tokens + '/' + o.output_tokens + ' tokens';
+        else if (o.purchase_order_id !== undefined) summary = 'PO #' + o.purchase_order_id + (o.duplicate ? ' (duplicate suppressed)' : '');
         return '<tr>' + cell(s.seq, 'mono') + cell(s.kind) + cell(s.status) +
-               cell(`${runId.slice(0, 8)}…:${s.seq}`, 'mono') + cell(summary) + '</tr>';
+               cell(runId.slice(0, 8) + '…:' + s.seq, 'mono') + cell(summary) + '</tr>';
       }).join('');
     }
   } catch {}
 }
 
 if (runId) subscribe(runId);
+tailLogs();
 pollHealth();
 refreshHood();
 </script>

@@ -71,6 +71,7 @@ func (e *Engine) Execute(ctx context.Context, r store.Run) (err error) {
 	agent.Env = append(os.Environ(),
 		"BULKHEAD_RUN_ID="+r.ID,
 		"BULKHEAD_INSTANCE_ID="+r.InstanceID,
+		"BULKHEAD_QUESTION="+r.Question,
 	)
 	stdin, err := agent.StdinPipe()
 	if err != nil {

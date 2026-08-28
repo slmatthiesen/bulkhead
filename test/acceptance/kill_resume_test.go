@@ -177,6 +177,9 @@ func startDaemon(t *testing.T, ledger string) *daemon {
 		"BULKHEAD_EXECUTOR=fixture",
 		"BULKHEAD_FIXTURE_LEDGER="+ledger,
 		"BULKHEAD_FIXTURE_STEP_DELAY="+fixtureStepDelay,
+		// Its own queue, so a demo control plane left running against the same database does not
+		// claim this test's messages and execute them with a different agent.
+		"BULKHEAD_QUEUE_NAME=acceptance",
 	)
 	out := &syncBuffer{}
 	cmd.Stdout = out

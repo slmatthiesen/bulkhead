@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/slmatthiesen/bulkhead/internal/executor"
+	"github.com/slmatthiesen/bulkhead/internal/logbuf"
+	"github.com/slmatthiesen/bulkhead/internal/queue"
 	"github.com/slmatthiesen/bulkhead/internal/run"
 	"github.com/slmatthiesen/bulkhead/internal/store"
 	"github.com/slmatthiesen/bulkhead/internal/trace"
@@ -26,14 +28,18 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	if err := serve(log); err != nil {
+	// Logs go to stderr as before and are also kept in memory so the console can tail them. Killing
+	// a process is otherwise invisible -- the run simply stops advancing, which looks identical to
+	// a slow step. Streaming the log is what puts the death on screen.
+	logs := logbuf.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}), 400)
+	log := slog.New(logs)
+	if err := serve(log, logs); err != nil {
 		log.Error("control plane exited", "err", err)
 		os.Exit(1)
 	}
 }
 
-func serve(log *slog.Logger) error {
+func serve(log *slog.Logger, logs *logbuf.Buffer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -83,37 +89,34 @@ func serve(log *slog.Logger) error {
 	}
 	engine := run.NewEngine(db, exec, agentCmd, log)
 
-	// Milestone 1 executes runs serially in this process. The queue is a channel; Milestone 3
-	// replaces it with Redis Streams and stateless workers, which is why nothing outside this
-	// file knows how work is dispatched.
-	queue := make(chan string, 1024)
+	// One path in. Everything is enqueued and everything is claimed under a lease, so a run
+	// interrupted by a crash comes back the same way a new one arrives -- there is no separate
+	// recovery scan, because an expired lease already means "nobody is working on this".
+	lease, err := time.ParseDuration(envOr("BULKHEAD_QUEUE_LEASE", "3s"))
+	if err != nil {
+		return fmt.Errorf("BULKHEAD_QUEUE_LEASE: %w", err)
+	}
+	q, err := queue.NewPostgres(ctx, db.Pool(), os.Getenv("BULKHEAD_QUEUE_NAME"), lease)
+	if err != nil {
+		return err
+	}
+
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		work(ctx, db, engine, queue, log)
+		work(ctx, db, engine, q, lease, log)
 	}()
-
-	// Anything still marked queued or running belongs to a control plane that died. Nothing else
-	// can leave a run in that state, so recovering them at startup is unambiguous.
-	resumed, err := db.UnfinishedRuns(ctx)
-	if err != nil {
-		return err
-	}
-	for _, r := range resumed {
-		log.Info("resuming interrupted run", "run", r.ID, "state", r.State, "completed_steps", r.StepCount)
-		queue <- r.ID
-	}
 
 	addr := envOr("BULKHEAD_ADDR", "127.0.0.1:8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           routes(ctx, db, demo, queue, log),
+		Handler:           routes(ctx, db, demo, q, logs, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	listenErr := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", addr, "resumed_runs", len(resumed))
+		log.Info("listening", "addr", addr, "queue_lease", lease)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			listenErr <- err
 		}
@@ -133,30 +136,90 @@ func serve(log *slog.Logger) error {
 	return err
 }
 
-func work(ctx context.Context, db *store.Store, engine *run.Engine, queue <-chan string, log *slog.Logger) {
+// work claims messages and runs them, holding each lease open until the run is done.
+func work(ctx context.Context, db *store.Store, engine *run.Engine, q *queue.Postgres, lease time.Duration, log *slog.Logger) {
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case id := <-queue:
-			r, err := db.GetRun(ctx, id)
-			if err != nil {
-				log.Error("cannot load queued run", "run", id, "err", err)
-				continue
+		case <-poll.C:
+		}
+
+		msg, ok, err := q.Claim(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Error("claim from queue", "err", err)
 			}
-			if r.State == store.StateSucceeded || r.State == store.StateFailed {
-				continue
-			}
-			if err := engine.Execute(ctx, r); err != nil && ctx.Err() == nil {
-				log.Error("run failed", "run", id, "err", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if msg.Deliveries > 1 {
+			log.Info("redelivered after a lease expired", "run", msg.RunID, "deliveries", msg.Deliveries)
+		}
+		runOne(ctx, db, engine, q, lease, msg, log)
+	}
+}
+
+// runOne executes one claimed message, keeping its lease alive for as long as the work takes.
+//
+// Without the heartbeat the lease would expire mid-run and a second worker would claim work that
+// is already in progress. That is survivable -- duplicate delivery is the assumption the whole
+// design is built on -- but it is waste, and the heartbeat is what separates "this worker is slow"
+// from "this worker is dead". A worker that dies stops heartbeating, which is exactly the signal
+// wanted.
+func runOne(ctx context.Context, db *store.Store, engine *run.Engine, q *queue.Postgres, lease time.Duration, msg queue.Message, log *slog.Logger) {
+	heartbeat := time.NewTicker(lease / 3)
+	defer heartbeat.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-heartbeat.C:
+				if err := q.Extend(context.WithoutCancel(ctx), msg.RunID); err != nil {
+					log.Error("extend lease", "run", msg.RunID, "err", err)
+				}
 			}
 		}
+	}()
+
+	r, err := db.GetRun(ctx, msg.RunID)
+	if err != nil {
+		log.Error("cannot load claimed run", "run", msg.RunID, "err", err)
+		return
+	}
+	if r.State == store.StateSucceeded || r.State == store.StateFailed {
+		ack(ctx, q, msg.RunID, log)
+		return
+	}
+	if err := engine.Execute(ctx, r); err != nil {
+		if ctx.Err() == nil {
+			log.Error("run failed", "run", msg.RunID, "err", err)
+			ack(ctx, q, msg.RunID, log) // terminal: a failed run is recorded, not retried forever
+		}
+		return
+	}
+	ack(ctx, q, msg.RunID, log)
+}
+
+// ack uses a context detached from shutdown: a run that finished must have its message removed
+// even if the process is on its way down, or it is delivered again and redone for nothing.
+func ack(ctx context.Context, q *queue.Postgres, runID string, log *slog.Logger) {
+	if err := q.Ack(context.WithoutCancel(ctx), runID); err != nil {
+		log.Error("ack", "run", runID, "err", err)
 	}
 }
 
 // routes takes the process context so that open event streams end when the control plane is
 // shutting down; without it a stream would hold the graceful shutdown open until it timed out.
-func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, queue chan<- string, log *slog.Logger) http.Handler {
+func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, q *queue.Postgres, logs *logbuf.Buffer, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /", web.Handler())
@@ -169,6 +232,7 @@ func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, queue
 	mux.HandleFunc("POST /runs", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			InstanceID string `json:"instance_id"`
+			Question   string `json:"question"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -178,13 +242,17 @@ func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, queue
 			http.Error(w, "instance_id is required", http.StatusBadRequest)
 			return
 		}
-		created, err := db.CreateRun(r.Context(), body.InstanceID)
+		created, err := db.CreateRun(r.Context(), body.InstanceID, body.Question)
 		if err != nil {
 			log.Error("create run", "err", err)
 			http.Error(w, "could not create run", http.StatusInternalServerError)
 			return
 		}
-		queue <- created.ID
+		if err := q.Enqueue(r.Context(), created.ID); err != nil {
+			log.Error("enqueue run", "run", created.ID, "err", err)
+			http.Error(w, "could not queue run", http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]string{"id": created.ID})
 	})
@@ -261,6 +329,48 @@ func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, queue
 			case <-poll.C:
 			}
 		}
+	})
+
+	// The control plane's own log, tailed the same way the trajectory is. A reader that reconnects
+	// after a crash starts from zero, because the buffer died with the process it was describing.
+	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher.Flush()
+
+		after := lastEventID(r)
+		for {
+			for _, line := range logs.Since(r.Context(), after, 2*time.Second) {
+				payload, err := json.Marshal(line)
+				if err != nil {
+					return
+				}
+				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", line.ID, payload)
+				after = line.ID
+			}
+			flusher.Flush()
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
+	})
+
+	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
+		waiting, leased, err := q.Depth(r.Context())
+		if err != nil {
+			http.Error(w, "could not read queue", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]int{"waiting": waiting, "leased": leased})
 	})
 
 	// The kill button. os.Exit skips every deferred close, flush and shutdown, which is the point:

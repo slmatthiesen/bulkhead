@@ -42,6 +42,7 @@ var ErrNotFound = errors.New("run not found")
 type Run struct {
 	ID          string
 	InstanceID  string
+	Question    string
 	State       string
 	Patch       string
 	TestsPassed bool
@@ -72,27 +73,27 @@ func Open(ctx context.Context, url string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
-func (s *Store) CreateRun(ctx context.Context, instanceID string) (Run, error) {
+func (s *Store) CreateRun(ctx context.Context, instanceID, question string) (Run, error) {
 	id, err := newID()
 	if err != nil {
 		return Run{}, err
 	}
 	_, err = s.pool.Exec(ctx,
-		`insert into runs (id, instance_id, state) values ($1, $2, $3)`,
-		id, instanceID, StateQueued)
+		`insert into runs (id, instance_id, state, question) values ($1, $2, $3, $4)`,
+		id, instanceID, StateQueued, question)
 	if err != nil {
 		return Run{}, fmt.Errorf("create run: %w", err)
 	}
-	return Run{ID: id, InstanceID: instanceID, State: StateQueued}, nil
+	return Run{ID: id, InstanceID: instanceID, Question: question, State: StateQueued}, nil
 }
 
-const runColumns = `r.id, r.instance_id, r.state, r.result_patch, r.result_tests_passed, r.error,
+const runColumns = `r.id, r.instance_id, r.question, r.state, r.result_patch, r.result_tests_passed, r.error,
 	(select count(*) from steps s where s.run_id = r.id and s.status = 'completed')`
 
 func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	var r Run
 	err := s.pool.QueryRow(ctx, `select `+runColumns+` from runs r where r.id = $1`, id).
-		Scan(&r.ID, &r.InstanceID, &r.State, &r.Patch, &r.TestsPassed, &r.Error, &r.StepCount)
+		Scan(&r.ID, &r.InstanceID, &r.Question, &r.State, &r.Patch, &r.TestsPassed, &r.Error, &r.StepCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
@@ -117,7 +118,7 @@ func (s *Store) UnfinishedRuns(ctx context.Context) ([]Run, error) {
 	var runs []Run
 	for rows.Next() {
 		var r Run
-		if err := rows.Scan(&r.ID, &r.InstanceID, &r.State, &r.Patch, &r.TestsPassed, &r.Error, &r.StepCount); err != nil {
+		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Question, &r.State, &r.Patch, &r.TestsPassed, &r.Error, &r.StepCount); err != nil {
 			return nil, fmt.Errorf("scan unfinished run: %w", err)
 		}
 		runs = append(runs, r)
@@ -278,3 +279,8 @@ func (s *Store) Steps(ctx context.Context, runID string) ([]Step, error) {
 	}
 	return out, rows.Err()
 }
+
+// Pool exposes the connection pool so that things which are part of the control plane's durable
+// state -- the queue, notably -- can live in their own package without opening a second pool
+// against the same database.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
