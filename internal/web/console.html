@@ -1,0 +1,365 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bulkhead — warehouse agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --dim: #8b949e;
+    --ok: #3fb950; --replayed: #8957e5; --failed: #da3633; --warn: #d29922; --accent: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+           border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  h1 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+  nav { display: flex; gap: 4px; margin-left: 8px; }
+  nav button, .actions button {
+    font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 6px; cursor: pointer;
+    background: #21262d; color: var(--text); border: 1px solid var(--line);
+  }
+  nav button.on { background: var(--accent); border-color: var(--accent); color: #04131f; font-weight: 600; }
+  .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .actions button:hover { border-color: var(--dim); }
+  button.danger { border-color: #7d2725; color: #ff9492; }
+  button.danger:hover { background: #7d2725; color: #fff; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-family: var(--mono);
+          padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .pill.up .dot { background: var(--ok); }
+  .pill.down .dot { background: var(--failed); }
+  .pill.down { border-color: #7d2725; color: #ff9492; }
+
+  main { padding: 22px; max-width: 1080px; margin: 0 auto; }
+  .hint { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+
+  .step { border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px;
+          padding: 13px 16px; margin-bottom: 10px; background: var(--panel); }
+  .step .top { display: flex; align-items: baseline; gap: 10px; }
+  .step .n { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .step .title { font-weight: 600; }
+  .step .detail { color: var(--dim); font-size: 14px; margin-top: 5px; white-space: pre-wrap; }
+  .step .quote { border-left: 2px solid var(--line); padding-left: 12px; margin-top: 8px;
+                 color: var(--text); font-size: 14px; font-style: italic; }
+  .badge { margin-left: auto; font-size: 11px; font-family: var(--mono); padding: 3px 8px;
+           border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .step.started { border-left-color: var(--warn); }
+  .step.completed { border-left-color: var(--ok); }
+  .step.replayed { border-left-color: var(--replayed); border-style: dashed; }
+  .step.replayed .badge { border-color: var(--replayed); color: #c297ff; }
+  .step.failed { border-left-color: var(--failed); }
+  .step.dup .badge { border-color: var(--warn); color: #e3b341; }
+
+  .banner { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+            background: #1c2128; font-size: 14px; }
+  .banner.crash { border-color: #7d2725; color: #ff9492; }
+  .banner.resumed { border-color: var(--replayed); color: #c297ff; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.mono, th.mono { font-family: var(--mono); }
+  .low { color: #ff9492; font-weight: 600; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+           padding: 16px 18px; margin-bottom: 18px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .02em; }
+  .panel h2 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+  pre { font-family: var(--mono); font-size: 12px; color: var(--dim); overflow-x: auto;
+        background: #0d1117; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 0; }
+
+  .layer { display: grid; grid-template-columns: 190px 1fr 1fr; gap: 0; align-items: stretch;
+           border-bottom: 1px solid var(--line); }
+  .layer:last-child { border-bottom: none; }
+  .layer > div { padding: 13px 14px; }
+  .layer .what { font-weight: 600; border-right: 1px solid var(--line); }
+  .layer .what span { display: block; font-weight: 400; font-size: 12px; color: var(--dim); margin-top: 3px; }
+  .layer .now { color: var(--dim); font-size: 13px; border-right: 1px solid var(--line); font-family: var(--mono); }
+  .layer .prod { font-size: 13px; }
+  .layer .prod b { color: var(--accent); font-weight: 600; }
+  .layerhead { display: grid; grid-template-columns: 190px 1fr 1fr; border-bottom: 1px solid var(--line);
+               font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .layerhead > div { padding: 8px 14px; }
+  .hide { display: none; }
+</style>
+
+<header>
+  <h1>bulkhead <small>warehouse restock agent</small></h1>
+  <nav>
+    <button data-tab="run" class="on">Run</button>
+    <button data-tab="hood">Under the hood</button>
+    <button data-tab="arch">Architecture</button>
+  </nav>
+  <div class="actions">
+    <span id="health" class="pill"><span class="dot"></span><span id="healthtext">checking</span></span>
+    <button id="reseed">Reseed</button>
+    <button id="start">Start run</button>
+    <button id="kill" class="danger">Kill control plane</button>
+  </div>
+</header>
+
+<main>
+  <section id="tab-run">
+    <p class="hint">Stock is checked, the shortfall is assessed, and a purchase order goes to each vendor.
+      Kill the control plane mid-run: it restarts, replays what it already did, and finishes — without
+      ordering twice.</p>
+    <div id="banner"></div>
+    <div id="steps"></div>
+  </section>
+
+  <section id="tab-hood" class="hide">
+    <div class="panel">
+      <h2>Checkpoints <small>the rows a resumed run reads from</small></h2>
+      <table><thead><tr>
+        <th class="mono">seq</th><th>kind</th><th>status</th><th>idempotency key</th><th>output</th>
+      </tr></thead><tbody id="hoodsteps"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Inventory <small>live from Postgres</small></h2>
+      <table><thead><tr>
+        <th>product</th><th class="mono">on hand</th><th class="mono">threshold</th><th>vendor</th>
+      </tr></thead><tbody id="hoodstock"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Outbox <small>what was actually sent — the count that must not double</small></h2>
+      <table><thead><tr>
+        <th class="mono">PO</th><th>vendor</th><th>items</th><th class="mono">total</th>
+      </tr></thead><tbody id="hoodorders"></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-arch" class="hide">
+    <div class="panel">
+      <h2>What runs where</h2>
+      <p class="hint" style="margin-bottom:16px">Every layer is behind an interface. The middle column is
+        what this laptop is running right now; the right column is what it becomes in your environment,
+        without the control plane changing.</p>
+      <div class="layerhead"><div>layer</div><div>on this laptop</div><div>in your environment</div></div>
+
+      <div class="layer">
+        <div class="what">Agent<span>decides what to do</span></div>
+        <div class="now">a local subprocess,<br>NDJSON over pipes</div>
+        <div class="prod">The same process inside a <b>sandboxed container</b> — gVisor or a Firecracker
+          microVM when the agent runs untrusted code. The boundary is already a pipe, so the agent does
+          not know which it is.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Checkpoints<span>how a run survives a crash</span></div>
+        <div class="now">Postgres in Docker,<br>localhost:5432</div>
+        <div class="prod"><b>Your RDS instance.</b> One connection string. Nothing else changes — the
+          schema, the write ordering and the replay logic are identical.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Dispatch<span>how work reaches a worker</span></div>
+        <div class="now">an in-process<br>Go channel</div>
+        <div class="prod"><b>SQS</b>, Redis Streams, or Kafka. The lease-and-redeliver semantics the
+          channel fakes are what SQS visibility timeouts give you for real.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Compute<span>what runs the workers</span></div>
+        <div class="now">one process,<br>runs serially</div>
+        <div class="prod"><b>ECS or EKS</b>, scaled on queue depth with KEDA. Workers are stateless
+          because all durable state is in the checkpoint store.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Model<span>the reasoning step</span></div>
+        <div class="now">Moonshot / Kimi<br>over an OpenAI-compatible API</div>
+        <div class="prod"><b>Bedrock</b>, Vertex, or Anthropic directly. Selected by config, because
+          only answer quality depends on the model — throughput and failure behaviour do not.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Side effect<span>the thing that costs money</span></div>
+        <div class="now">a row in a<br>purchase_orders table</div>
+        <div class="prod">Your <b>ERP, SendGrid, or vendor EDI</b>. The idempotency key that stops a
+          double-send here is the one you would pass to their API.</div>
+      </div>
+      <div class="layer">
+        <div class="what">Traces<span>what the agent did, and when</span></div>
+        <div class="now">OpenTelemetry spans,<br>exporter off by default</div>
+        <div class="prod"><b>Langfuse</b>, self-hosted or cloud — or any OTLP collector. One
+          environment variable; no vendor is named in the code.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Why the reasoning step is checkpointed too</h2>
+      <p style="margin:0 0 10px">A resumed agent must reach the state it was in. If it re-ran its model
+        call it would sample a different answer, ask for different steps, and replay by step number
+        would stop meaning anything — so model calls go through the control plane like every other
+        step, and a resumed run is handed back the tokens it saw the first time.</p>
+      <p style="margin:0; color:var(--dim); font-size:14px">It is also why a crash costs nothing:
+        the model is not billed twice.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let runId = location.hash.slice(1) || null;
+let source = null, seen = new Set(), sawCrash = false;
+
+// --- tabs ---
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  for (const t of ['run', 'hood', 'arch']) $('#tab-' + t).classList.toggle('hide', t !== b.dataset.tab);
+  if (b.dataset.tab === 'hood') refreshHood();
+});
+
+// --- health, and the reconnect that makes a crash self-healing ---
+// The kill button ends the process. A supervisor restarts it, the restarted process finds the run
+// that was in flight and resumes it, and this poll is what notices and re-attaches the stream. No
+// resume button, because nothing needs to be asked for.
+async function pollHealth() {
+  // The whole body is guarded and the reschedule is in `finally`, because this loop is the only
+  // thing that notices the control plane died -- and it runs precisely when things are going
+  // wrong. A poll that throws once and silently stops rescheduling leaves the page frozen on a
+  // green "up" pill while the process is gone, which is worse than having no indicator at all.
+  try {
+    let up = false;
+    try { up = (await fetch('/healthz', {cache: 'no-store'})).ok; } catch {}
+
+    $('#health').className = 'pill ' + (up ? 'up' : 'down');
+    $('#healthtext').textContent = up ? 'control plane up' : 'control plane down';
+    for (const id of ['reseed', 'start', 'kill']) $('#' + id).disabled = !up;
+
+    if (!up) {
+      sawCrash = true;
+      banner('crash', 'Control plane is down. The supervisor will restart it, and the run resumes from its last checkpoint.');
+    } else if (sawCrash) {
+      sawCrash = false;
+      banner('resumed', 'Control plane restarted. Steps it had already completed are replayed from Postgres rather than executed again.');
+      if (runId) subscribe(runId);
+    }
+  } catch (e) {
+    console.error('health poll', e);
+  } finally {
+    setTimeout(pollHealth, 400);
+  }
+}
+function banner(kind, text) { $('#banner').innerHTML = `<div class="banner ${kind}">${text}</div>`; }
+
+// --- actions ---
+$('#reseed').onclick = async () => {
+  await fetch('/demo/reseed', {method: 'POST'});
+  $('#steps').innerHTML = ''; $('#banner').innerHTML = ''; seen.clear();
+  runId = null; location.hash = ''; refreshHood();
+};
+$('#kill').onclick = () => fetch('/demo/kill', {method: 'POST'}).catch(() => {});
+$('#start').onclick = async () => {
+  const r = await fetch('/runs', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({instance_id: 'warehouse-restock'}),
+  });
+  const {id} = await r.json();
+  $('#steps').innerHTML = ''; $('#banner').innerHTML = ''; seen.clear();
+  runId = id; location.hash = id; subscribe(id);
+};
+
+// --- the run view ---
+function subscribe(id) {
+  if (source) source.close();
+  source = new EventSource(`/runs/${id}/events`);
+  source.onmessage = e => { render(JSON.parse(e.data)); refreshHoodSoon(); };
+}
+
+// Turning a step into a sentence. The kind and the payload carry everything needed; the point of
+// this function is that an audience should not have to read JSON to follow what the agent did.
+function describe(ev) {
+  const p = ev.payload || {};
+  switch (ev.kind) {
+    case 'run_started':
+      return p.checkpointed_steps
+        ? {t: 'Picked the run back up', d: `${p.checkpointed_steps} step(s) already checkpointed — replaying them.`}
+        : {t: 'Started', d: 'Checking the warehouse.'};
+    case 'run_finished': return {t: 'Done', d: p.patch || ''};
+    case 'run_failed':   return {t: 'Failed', d: String(p)};
+  }
+  if (ev.kind === 'step_started') {
+    if (p.query) return {t: 'Checking inventory', d: 'Looking for products below their reorder threshold.'};
+    if (p.messages) return {t: 'Assessing the shortfall', d: 'Asking the model to summarise the situation.'};
+    if (p.vendor_id) return {t: `Sending a purchase order to ${p.vendor_id}`, d: (p.line_items || []).map(i => `${i.name} ×${i.quantity}`).join('\n')};
+  }
+  if (p.count !== undefined) return {t: 'Checked inventory', d: `${p.count} product(s) below reorder threshold.`};
+  if (p.text !== undefined) return {t: 'Assessed the shortfall', d: '', q: p.text};
+  if (p.purchase_order_id !== undefined) {
+    return {
+      t: p.duplicate ? 'Already ordered — not sent again' : 'Purchase order sent',
+      d: `${p.vendor_email} · $${(p.total_cents / 100).toFixed(2)}` +
+         (p.duplicate ? '\nThis step was interrupted mid-send. On retry the idempotency key matched an order that already existed, so nothing was sent twice.' : ''),
+      dup: !!p.duplicate,
+    };
+  }
+  return {t: ev.kind, d: ''};
+}
+
+function render(ev) {
+  if (seen.has(ev.id)) return;
+  seen.add(ev.id);
+  const info = describe(ev);
+
+  // A completed step supersedes its own started card rather than stacking beneath it.
+  const key = `${ev.seq}`;
+  let el = ev.seq ? document.querySelector(`.step[data-seq="${key}"]`) : null;
+  if (!el || !ev.seq) {
+    el = document.createElement('div');
+    if (ev.seq) el.dataset.seq = key;
+    $('#steps').appendChild(el);
+  }
+  const state = ev.kind === 'step_replayed' ? 'replayed'
+              : ev.kind === 'step_started' ? 'started'
+              : ev.kind === 'run_failed' ? 'failed' : 'completed';
+  el.className = 'step ' + state + (info.dup ? ' dup' : '');
+  const badge = ev.kind === 'step_replayed' ? 'replayed from checkpoint'
+              : info.dup ? 'idempotency key matched'
+              : ev.kind === 'step_started' ? 'running' : '';
+  el.innerHTML =
+    `<div class="top">${ev.seq ? `<span class="n">${ev.seq}</span>` : ''}` +
+    `<span class="title"></span>${badge ? `<span class="badge">${badge}</span>` : ''}</div>` +
+    (info.d ? `<div class="detail"></div>` : '') +
+    (info.q ? `<div class="quote"></div>` : '');
+  el.querySelector('.title').textContent = info.t;
+  if (info.d) el.querySelector('.detail').textContent = info.d;
+  if (info.q) el.querySelector('.quote').textContent = info.q;
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+// --- under the hood ---
+let hoodTimer = null;
+function refreshHoodSoon() { clearTimeout(hoodTimer); hoodTimer = setTimeout(refreshHood, 400); }
+async function refreshHood() {
+  const cell = (v, cls) => `<td${cls ? ` class="${cls}"` : ''}>${v}</td>`;
+  try {
+    const stock = await (await fetch('/demo/inventory')).json();
+    $('#hoodstock').innerHTML = stock.map(r => {
+      const low = r.on_hand < r.reorder_threshold;
+      return `<tr>${cell(r.name, low ? 'low' : '')}${cell(r.on_hand, 'mono')}${cell(r.reorder_threshold, 'mono')}${cell(r.vendor_name)}</tr>`;
+    }).join('');
+
+    const orders = await (await fetch('/demo/orders')).json();
+    $('#hoodorders').innerHTML = orders.length
+      ? orders.map(o => '<tr>' + cell('#' + o.id, 'mono') + cell(o.vendor_email) +
+          cell((o.line_items || []).map(i => `${i.sku} ×${i.quantity}`).join('<br>')) +
+          cell('$' + (o.total_cents / 100).toFixed(2), 'mono') + '</tr>').join('')
+      : `<tr><td colspan="4" style="color:var(--dim)">nothing sent yet</td></tr>`;
+
+    if (runId) {
+      const steps = await (await fetch(`/runs/${runId}/steps`)).json();
+      $('#hoodsteps').innerHTML = steps.map(s => {
+        const o = s.output || {};
+        let summary = '';
+        if (o.count !== undefined) summary = `${o.count} rows`;
+        else if (o.text !== undefined) summary = `${o.input_tokens}/${o.output_tokens} tokens`;
+        else if (o.purchase_order_id !== undefined) summary = `PO #${o.purchase_order_id}${o.duplicate ? ' (duplicate suppressed)' : ''}`;
+        return '<tr>' + cell(s.seq, 'mono') + cell(s.kind) + cell(s.status) +
+               cell(`${runId.slice(0, 8)}…:${s.seq}`, 'mono') + cell(summary) + '</tr>';
+      }).join('');
+    }
+  } catch {}
+}
+
+if (runId) subscribe(runId);
+pollHealth();
+refreshHood();
+</script>
