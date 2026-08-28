@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Runs the demo control plane under a supervisor.
+# Runs the demo: a supervisor that starts the control plane and then waits.
 #
-# The kill button in the console calls os.Exit, which is the point -- crash recovery demonstrated
-# by a graceful shutdown is not a demonstration. But a dead process cannot restart itself, so
-# something has to. In production that is a container runtime restarting the pod; here it is this
-# loop, and the behaviour is the same: the process comes back, finds the run that was in flight,
-# and resumes it from its checkpoints without anyone asking.
+# It does not restart on its own. The kill button in the console ends the process, and the console
+# then offers a Restart button -- because the window where the process is gone and the work is not
+# is the whole point, and a supervisor that closes it after two seconds closes it before anyone can
+# talk about it.
+#
+# The supervisor's control API is on its own port so that it is still answering when the control
+# plane is not.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,13 +17,7 @@ export BULKHEAD_AGENT_CMD="${BULKHEAD_AGENT_CMD:-$PWD/bin/supplychain-agent.exe}
 export BULKHEAD_AGENT_USE_LLM="${BULKHEAD_AGENT_USE_LLM:-1}"
 export BULKHEAD_DEMO_STEP_DELAY="${BULKHEAD_DEMO_STEP_DELAY:-4s}"
 export BULKHEAD_ADDR="${BULKHEAD_ADDR:-127.0.0.1:8080}"
+export BULKHEAD_SUPERVISOR_ADDR="${BULKHEAD_SUPERVISOR_ADDR:-127.0.0.1:8081}"
+export BULKHEAD_DAEMON_BIN="${BULKHEAD_DAEMON_BIN:-$PWD/bin/bulkheadd.exe}"
 
-echo "supervisor: starting control plane on $BULKHEAD_ADDR"
-while true; do
-    ./bin/bulkheadd.exe
-    code=$?
-    # Three seconds, not one. The restart is not the interesting part -- the outage is, and a
-    # blink too short for the console to notice is a blink too short for an audience to notice.
-    echo "supervisor: control plane exited ($code), restarting in 2s"
-    sleep 2
-done
+exec ./bin/bulkhead-demo.exe

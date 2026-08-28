@@ -26,6 +26,8 @@
   .actions button:hover { border-color: var(--dim); }
   button.danger { border-color: #7d2725; color: #ff9492; }
   button.danger:hover { background: #7d2725; color: #fff; }
+  #restart { border-color: var(--ok); color: #7ee787; font-weight: 600; }
+  #restart:hover { background: #1b4721; color: #fff; }
   button:disabled { opacity: .4; cursor: not-allowed; }
 
   .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-family: var(--mono);
@@ -37,7 +39,7 @@
 
   main { padding: 18px 20px; max-width: 1400px; margin: 0 auto; }
 
-  form#ask { display: flex; gap: 8px; margin-bottom: 16px; }
+  form#ask { display: flex; gap: 8px; margin-top: 18px; }
   form#ask input {
     flex: 1; font: inherit; padding: 11px 14px; border-radius: 8px;
     background: var(--panel); color: var(--text); border: 1px solid var(--line);
@@ -121,21 +123,22 @@
     <span id="health" class="pill"><span class="dot"></span><span id="healthtext">checking</span></span>
     <button id="reseed">Reseed</button>
     <button id="kill" class="danger">Kill control plane</button>
+    <button id="restart" class="hide">Restart control plane</button>
   </div>
 </header>
 
 <main>
   <section id="tab-run">
-    <form id="ask">
-      <input id="question" autocomplete="off"
-             value="Which vitamins are we going to run out of before the end of the week?">
-      <button type="submit">Ask</button>
-    </form>
     <div class="split">
       <div>
         <div id="asked"></div>
         <div id="banner"></div>
         <div id="steps"></div>
+        <form id="ask">
+          <input id="question" autocomplete="off"
+                 value="Which vitamins are we going to run out of before the end of the week?">
+          <button type="submit">Ask</button>
+        </form>
       </div>
       <aside class="logs">
         <h3><span class="dot" id="logdot"></span> control plane · live log</h3>
@@ -293,6 +296,9 @@
 const $ = s => document.querySelector(s);
 let runId = location.hash.slice(1) || null;
 let source = null, logSource = null, seen = new Set(), sawCrash = false, logWasDown = false;
+// Same host, supervisor port. It is a separate process on purpose: it has to answer while the
+// control plane is dead, which is exactly when it is needed.
+const SUPERVISOR = location.protocol + '//' + location.hostname + ':8081';
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
@@ -315,10 +321,14 @@ async function pollHealth() {
     $('#logdot').style.background = up ? 'var(--ok)' : 'var(--failed)';
     for (const id of ['reseed', 'kill']) $('#' + id).disabled = !up;
 
+    // The supervisor lives on its own port and keeps answering when the control plane does not,
+    // which is what makes a manual restart possible at all.
+    $('#restart').classList.toggle('hide', up);
+
     if (!up) {
-      if (!logWasDown) { logWasDown = true; logLine('dead', '— control plane died; the supervisor will restart it —'); }
+      if (!logWasDown) { logWasDown = true; logLine('dead', '— control plane died. Nothing will restart it until you say so. —'); }
       sawCrash = true;
-      banner('crash', 'Control plane is down. The message it was holding stays in the queue; when the lease expires the run is delivered again.');
+      banner('crash', 'Control plane is down, and nothing is going to restart it on its own. The message it was holding is still in the queue with an expired lease — the run is waiting, not lost. Press Restart when you are ready.');
     } else if (sawCrash) {
       sawCrash = false; logWasDown = false;
       banner('resumed', 'Restarted and claimed the run back. Steps that had already completed are replayed from Postgres rather than executed again.');
@@ -367,6 +377,13 @@ $('#reseed').onclick = async () => {
   seen.clear(); runId = null; location.hash = ''; refreshHood();
 };
 $('#kill').onclick = () => fetch('/demo/kill', {method: 'POST'}).catch(() => {});
+$('#restart').onclick = async () => {
+  $('#restart').disabled = true;
+  logLine('live', '— restart requested —');
+  try { await fetch(SUPERVISOR + '/start', {method: 'POST'}); }
+  catch (e) { logLine('dead', '— could not reach the supervisor on ' + SUPERVISOR + ' —'); }
+  $('#restart').disabled = false;
+};
 
 $('#ask').onsubmit = async e => {
   e.preventDefault();
