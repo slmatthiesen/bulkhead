@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>bulkhead — warehouse agent</title>
+<title>bulkhead — durable agent execution</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --dim: #8b949e;
@@ -112,7 +112,7 @@
 </style>
 
 <header>
-  <h1>bulkhead <small>warehouse restock agent</small></h1>
+  <h1>bulkhead <small>durable agent execution — a run outlives the process that started it</small></h1>
   <nav>
     <button data-tab="run" class="on">Run</button>
     <button data-tab="hood">Under the hood</button>
@@ -256,6 +256,37 @@
     </div>
 
     <div class="panel">
+      <h2>What a message is <small>because everything below depends on it</small></h2>
+      <p style="margin:0 0 12px">A message is <b>a run id and a delivery count</b>. That is the whole
+        thing — the work itself never travels. The steps, their inputs, their outputs and the answer
+        all live in Postgres from the moment the run is created, and the message is a pointer saying
+        <i>somebody should be working on this one</i>.</p>
+      <p style="margin:0 0 12px;color:var(--dim);font-size:14px">That is why losing a worker loses
+        nothing. There is no payload in flight to drop, and no state in a process to reconstruct —
+        only a claim that stopped being renewed.</p>
+      <table>
+        <thead><tr><th>when</th><th>what happens</th><th>where the work is</th></tr></thead>
+        <tbody>
+          <tr><td><b>You ask a question</b></td>
+              <td><span class="mono">POST /runs</span> writes the run and the question to Postgres,
+                  then enqueues its id. Two writes, one transaction's worth of intent.</td>
+              <td class="mono">Postgres</td></tr>
+          <tr><td><b>A worker claims it</b></td>
+              <td>The row is hidden for the lease duration and <span class="mono">deliveries</span>
+                  increments. Nothing is copied anywhere.</td>
+              <td class="mono">Postgres</td></tr>
+          <tr><td><b>The run executes</b></td>
+              <td>Each step is written <i>before</i> it runs and updated after. The worker holds no
+                  durable state of its own.</td>
+              <td class="mono">Postgres</td></tr>
+          <tr><td><b>It finishes</b></td>
+              <td>The message is deleted. Until that delete, it comes back.</td>
+              <td class="mono">Postgres</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
       <h2>How a stopped run gets picked back up</h2>
       <p style="margin:0 0 14px;color:var(--dim);font-size:14px">Nothing here polls for stuck work
         or reconciles state on a timer. A run that stops is a message whose lease nobody renewed,
@@ -308,7 +339,10 @@
         <thead><tr><th>layer</th><th>on this laptop</th><th>in your environment</th></tr></thead>
         <tbody>
           <tr><td><b>Queue</b></td><td class="mono">Postgres,<br>FOR UPDATE SKIP LOCKED</td>
-              <td><b style="color:#e7157b">Amazon SQS</b> — a visibility timeout is the same lease, and SKIP LOCKED is what the broker does for you</td></tr>
+              <td><b style="color:#e7157b">Amazon SQS</b> — a visibility timeout is the same lease, and SKIP LOCKED is what the broker does for you.
+                  Postgres is a real queue, not a stand-in: it is what Oban, GoodJob and River run on in production.
+                  Move when throughput passes what one database can absorb, or when you would rather not operate it —
+                  SQS also brings redrive, FIFO dedupe and long-polling, none of which are built here.</td></tr>
           <tr><td><b>Checkpoints</b></td><td class="mono">Postgres in Docker,<br>localhost:5432</td>
               <td><b style="color:#527fff">Amazon RDS</b> — one connection string; the schema, the write ordering and the replay logic are unchanged</td></tr>
           <tr><td><b>Workers</b></td><td class="mono">one process, serial</td>
