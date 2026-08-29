@@ -256,6 +256,41 @@
     </div>
 
     <div class="panel">
+      <h2>How a stopped run gets picked back up</h2>
+      <p style="margin:0 0 14px;color:var(--dim);font-size:14px">Nothing here polls for stuck work
+        or reconciles state on a timer. A run that stops is a message whose lease nobody renewed,
+        and that is the only condition anything has to detect.</p>
+      <table>
+        <thead><tr><th>what stopped</th><th>what picks it back up</th><th>who does it</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>One worker died</b><br><span style="color:var(--dim);font-size:12.5px">others still running</span></td>
+            <td>It stops renewing the lease. Within the lease window the message becomes visible again
+                and another worker claims it, replays the completed steps from the checkpoint store,
+                and carries on from the step that was in flight.</td>
+            <td><b style="color:var(--ok)">Nobody.</b> Seconds, unattended.</td>
+          </tr>
+          <tr>
+            <td><b>Every worker died</b><br><span style="color:var(--dim);font-size:12.5px">the whole process is gone</span></td>
+            <td>The message stays in the queue with an expired lease — visible, unclaimed, and
+                waiting. Nothing is lost, because nothing was ever held in memory. When a process
+                comes back it claims the message on its normal poll; recovery is not a startup
+                routine, it is the same loop as always.</td>
+            <td>Whatever restarts the process — <b>ECS, Kubernetes,</b> or the Restart button in
+                this demo. Then it is automatic again.</td>
+          </tr>
+          <tr>
+            <td><b>The run itself keeps failing</b><br><span style="color:var(--dim);font-size:12.5px">a poison message</span></td>
+            <td>Each delivery increments a counter, visible in the log as
+                <span class="mono">deliveries=N</span>. That number is the signal to stop retrying
+                and route the message aside for a human rather than loop on it forever.</td>
+            <td><b style="color:var(--warn)">Not built yet</b> — dead-letter queue, Milestone 6.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
       <h2>Why duplicates are assumed rather than prevented</h2>
       <div class="callout">
         Exactly-once delivery is not available to anything that talks over a network, so nothing here
