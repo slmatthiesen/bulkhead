@@ -88,6 +88,7 @@ type InventoryRow struct {
 	ReorderThreshold int    `json:"reorder_threshold"`
 	ReorderQuantity  int    `json:"reorder_quantity"`
 	UnitCostCents    int    `json:"unit_cost_cents"`
+	DailyUsage       int    `json:"daily_usage"`
 	VendorID         string `json:"vendor_id"`
 	VendorName       string `json:"vendor_name"`
 	VendorEmail      string `json:"vendor_email"`
@@ -111,7 +112,7 @@ type QueryOutput struct {
 
 const inventorySelect = `
 select i.sku, i.name, i.category, i.on_hand, i.reorder_threshold, i.reorder_quantity,
-       i.unit_cost_cents, i.vendor_id, v.name, v.email
+       i.unit_cost_cents, i.daily_usage, i.vendor_id, v.name, v.email
 from inventory i join vendors v on v.id = i.vendor_id`
 
 // QueryExecutor answers inventory questions. Reading is free to replay, which is exactly why it
@@ -160,7 +161,7 @@ func (q *queryExecutor) Execute(ctx context.Context, req executor.Request) (json
 	for rows.Next() {
 		var r InventoryRow
 		if err := rows.Scan(&r.SKU, &r.Name, &r.Category, &r.OnHand, &r.ReorderThreshold,
-			&r.ReorderQuantity, &r.UnitCostCents, &r.VendorID, &r.VendorName, &r.VendorEmail); err != nil {
+			&r.ReorderQuantity, &r.UnitCostCents, &r.DailyUsage, &r.VendorID, &r.VendorName, &r.VendorEmail); err != nil {
 			return nil, fmt.Errorf("scan inventory: %w", err)
 		}
 		out.Rows = append(out.Rows, r)
@@ -308,7 +309,7 @@ func (s *Store) Inventory(ctx context.Context) ([]InventoryRow, error) {
 	for rows.Next() {
 		var r InventoryRow
 		if err := rows.Scan(&r.SKU, &r.Name, &r.Category, &r.OnHand, &r.ReorderThreshold,
-			&r.ReorderQuantity, &r.UnitCostCents, &r.VendorID, &r.VendorName, &r.VendorEmail); err != nil {
+			&r.ReorderQuantity, &r.UnitCostCents, &r.DailyUsage, &r.VendorID, &r.VendorName, &r.VendorEmail); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/slmatthiesen/bulkhead/internal/executor"
 	"github.com/slmatthiesen/bulkhead/internal/protocol"
@@ -182,6 +183,33 @@ func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.Age
 		return protocol.StepResult{}, err
 	}
 
+	log.Info("step started", "seq", msg.Seq, "kind", msg.Step)
+	started := time.Now()
+
+	// A step that takes a while and says nothing is indistinguishable from a step that is stuck.
+	// Model calls take tens of seconds, so the log goes quiet at exactly the moment someone is most
+	// likely to wonder whether anything is still alive. This says so every few seconds -- often
+	// enough to reassure, rarely enough that it does not push the interesting lines off screen -- and
+	// stops as
+	// soon as the step returns.
+	stopTicking := make(chan struct{})
+	defer close(stopTicking)
+	go func() {
+		tick := time.NewTicker(3 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stopTicking:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				log.Info("step still running", "seq", msg.Seq, "kind", msg.Step,
+					"waiting", time.Since(started).Round(100*time.Millisecond))
+			}
+		}
+	}()
+
 	output, execErr := e.exec.Execute(ctx, executor.Request{
 		RunID:          runID,
 		Seq:            msg.Seq,
@@ -190,6 +218,8 @@ func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.Age
 		IdempotencyKey: fmt.Sprintf("%s:%d", runID, msg.Seq),
 	})
 	if execErr != nil {
+		log.Error("step failed", "seq", msg.Seq, "kind", msg.Step,
+			"took", time.Since(started).Round(time.Millisecond), "err", execErr)
 		if err := e.store.FailStep(ctx, runID, msg.Seq, execErr.Error()); err != nil {
 			return protocol.StepResult{}, err
 		}
@@ -202,6 +232,8 @@ func (e *Engine) resolveStep(ctx context.Context, runID string, msg protocol.Age
 	if err := e.store.AppendEvent(ctx, runID, msg.Seq, "step_completed", output); err != nil {
 		return protocol.StepResult{}, err
 	}
+	log.Info("step completed", "seq", msg.Seq, "kind", msg.Step,
+		"took", time.Since(started).Round(time.Millisecond))
 	return protocol.StepResult{Type: protocol.KindResult, Seq: msg.Seq, Output: output}, nil
 }
 

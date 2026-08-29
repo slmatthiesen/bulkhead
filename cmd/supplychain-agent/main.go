@@ -92,7 +92,11 @@ func run() error {
 func (s *session) explain(stock supplychain.QueryOutput) error {
 	var lines []string
 	for _, r := range stock.Rows {
-		lines = append(lines, fmt.Sprintf("%s: %d on hand, reorder below %d", r.Name, r.OnHand, r.ReorderThreshold))
+		line := fmt.Sprintf("%s: %d on hand, reorder below %d", r.Name, r.OnHand, r.ReorderThreshold)
+		if r.DailyUsage > 0 {
+			line += fmt.Sprintf(", using %d/day (%.1f days left)", r.DailyUsage, float64(r.OnHand)/float64(r.DailyUsage))
+		}
+		lines = append(lines, line)
 	}
 	// The operator's own words when there are any. A run that answers the question someone asked
 	// reads as an agent; the same run answering a hardcoded prompt reads as a scheduled job that

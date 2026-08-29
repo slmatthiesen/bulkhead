@@ -18,6 +18,9 @@ create table if not exists inventory (
     reorder_threshold integer not null,
     reorder_quantity  integer not null,
     unit_cost_cents   integer not null,
+    -- Units consumed per day. Without it "what runs out this week" is unanswerable from stock
+    -- levels alone, and a model asked anyway will correctly refuse.
+    daily_usage       integer not null default 0,
     vendor_id         text not null references vendors (id)
 );
 
@@ -46,3 +49,5 @@ create table if not exists purchase_orders (
 );
 
 create index if not exists purchase_orders_run_idx on purchase_orders (run_id, id);
+
+alter table inventory add column if not exists daily_usage integer not null default 0;
