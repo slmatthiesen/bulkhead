@@ -15,7 +15,12 @@
   header { display: flex; align-items: center; gap: 14px; padding: 12px 20px;
            border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
   h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  h1 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+  /* The tagline sits under the bar rather than inside the title. In the title it pushed the
+     controls onto a second row at anything narrower than a wide desktop, which cost vertical space
+     on the one screen that needs it. */
+  .tagline { padding: 9px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+             color: var(--dim); font-size: 12.5px; line-height: 1.45; }
+  .tagline b { color: var(--text); font-weight: 600; }
   nav { display: flex; gap: 4px; margin-left: 8px; }
   nav button, .actions button {
     font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 6px; cursor: pointer;
@@ -112,7 +117,7 @@
 </style>
 
 <header>
-  <h1>bulkhead <small>durable agent execution — a run outlives the process that started it</small></h1>
+  <h1>bulkhead</h1>
   <nav>
     <button data-tab="run" class="on">Run</button>
     <button data-tab="hood">Under the hood</button>
@@ -126,6 +131,8 @@
     <button id="restart" class="hide">Restart control plane</button>
   </div>
 </header>
+
+<div class="tagline"><b>durable agent execution</b><br>a run outlives the process that started it</div>
 
 <main>
   <section id="tab-run">
