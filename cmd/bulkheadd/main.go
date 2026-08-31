@@ -383,9 +383,14 @@ func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, q *qu
 			f.Flush()
 		}
 		go func() {
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
 			os.Exit(137) // what a SIGKILL looks like from the outside
 		}()
+	})
+
+	mux.HandleFunc("POST /demo/clear-log", func(w http.ResponseWriter, _ *http.Request) {
+		logs.Clear()
+		writeJSON(w, map[string]string{"status": "cleared"})
 	})
 
 	mux.HandleFunc("POST /demo/reseed", func(w http.ResponseWriter, r *http.Request) {
@@ -395,6 +400,23 @@ func routes(ctx context.Context, db *store.Store, demo *supplychain.Store, q *qu
 			return
 		}
 		writeJSON(w, map[string]string{"status": "reseeded"})
+	})
+
+	mux.HandleFunc("POST /demo/approve", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RunID string `json:"run_id"`
+			Reply string `json:"reply"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunID == "" || body.Reply == "" {
+			http.Error(w, "run_id and reply are required", http.StatusBadRequest)
+			return
+		}
+		if err := demo.Approve(r.Context(), body.RunID, body.Reply); err != nil {
+			log.Error("approve", "run", body.RunID, "err", err)
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "approved"})
 	})
 
 	mux.HandleFunc("GET /demo/inventory", func(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +486,9 @@ func newExecutor(log *slog.Logger, demo *supplychain.Store) (executor.Executor, 
 	}
 
 	byKind[supplychain.KindQuery] = demo.QueryExecutor()
+	byKind[supplychain.KindApprove] = demo.ApprovalExecutor()
 	byKind[supplychain.KindEmail] = demo.EmailExecutor()
+	byKind[supplychain.KindSlack] = demo.SlackExecutor()
 
 	// BULKHEAD_LLM_API_KEY wins over ANTHROPIC_API_KEY so that pointing the harness at cheap
 	// inference for development does not mean unsetting a key the rest of the machine relies on.

@@ -51,3 +51,41 @@ create table if not exists purchase_orders (
 create index if not exists purchase_orders_run_idx on purchase_orders (run_id, id);
 
 alter table inventory add column if not exists daily_usage integer not null default 0;
+
+-- A second, cheaper side effect after the purchase order, so the demo shows the idempotency pattern
+-- applied twice rather than looking like a one-off trick for email. Same shape as purchase_orders:
+-- idempotency_key is unique, so a retried notification collides here instead of paging the channel
+-- twice.
+create table if not exists slack_notifications (
+    id                bigserial primary key,
+    idempotency_key   text not null unique,
+    run_id            text not null,
+    purchase_order_id bigint not null references purchase_orders (id),
+    channel           text not null,
+    message           text not null,
+    sent_at           timestamptz not null default now()
+);
+
+create index if not exists slack_notifications_run_idx on slack_notifications (run_id, id);
+
+-- A human approval gate before the purchase order goes out. The row is the wait: the step blocks
+-- until this row's status flips to 'approved', and it is looked up by idempotency_key on retry so a
+-- run resumed after a crash finds the same pending (or already-approved) decision instead of asking
+-- again.
+create table if not exists approvals (
+    id              bigserial primary key,
+    idempotency_key text not null unique,
+    run_id          text not null,
+    vendor_id       text not null,
+    subject         text not null,
+    total_cents     integer not null,
+    status          text not null default 'pending' check (status in ('pending', 'approved')),
+    -- What the operator actually typed. The gate is "did a human reply", not "did they say a
+    -- specific word" -- this column is what makes that an honest claim instead of a fake one.
+    reply           text,
+    decided_at      timestamptz
+);
+
+create index if not exists approvals_run_idx on approvals (run_id, id);
+
+alter table approvals add column if not exists reply text;

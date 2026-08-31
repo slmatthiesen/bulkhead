@@ -12,7 +12,7 @@ import (
 	"net/http"
 )
 
-//go:embed console.html raw.html
+//go:embed console.html raw.html architecture.html
 var files embed.FS
 
 func Handler() http.Handler {

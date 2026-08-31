@@ -28,8 +28,10 @@ import (
 
 // Step kinds this workload adds.
 const (
-	KindQuery = "query"
-	KindEmail = "email"
+	KindQuery   = "query"
+	KindApprove = "approve"
+	KindEmail   = "email"
+	KindSlack   = "slack"
 )
 
 //go:embed schema.sql
@@ -72,8 +74,14 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Reseed restores starting stock levels and clears the outbox, so the demo can be run again.
 func (s *Store) Reseed(ctx context.Context) error {
+	if _, err := s.pool.Exec(ctx, "delete from slack_notifications"); err != nil {
+		return fmt.Errorf("clear slack notifications: %w", err)
+	}
 	if _, err := s.pool.Exec(ctx, "delete from purchase_orders"); err != nil {
 		return fmt.Errorf("clear outbox: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, "delete from approvals"); err != nil {
+		return fmt.Errorf("clear approvals: %w", err)
 	}
 	_, err := s.pool.Exec(ctx, seed)
 	return err
@@ -269,6 +277,143 @@ func (e *emailExecutor) Execute(ctx context.Context, req executor.Request) (json
 		return nil, fmt.Errorf("send purchase order: %w", err)
 	}
 	return json.Marshal(EmailOutput{PurchaseOrderID: id, VendorEmail: vendorEmail, TotalCents: total})
+}
+
+type ApprovalInput struct {
+	VendorID   string `json:"vendor_id"`
+	Subject    string `json:"subject"`
+	TotalCents int    `json:"total_cents"`
+}
+
+type ApprovalOutput struct {
+	Approved bool   `json:"approved"`
+	Reply    string `json:"reply"`
+}
+
+// ApprovalExecutor blocks the run until a human approves it, or the process dies -- there is no
+// third outcome. The wait is real, not simulated: the row it is waiting on is the same row Approve
+// flips, so a run resumed after a crash finds its own pending decision instead of asking twice.
+func (s *Store) ApprovalExecutor() executor.Executor { return &approvalExecutor{store: s} }
+
+type approvalExecutor struct{ store *Store }
+
+func (a *approvalExecutor) Close() error { return nil }
+
+func (a *approvalExecutor) Execute(ctx context.Context, req executor.Request) (json.RawMessage, error) {
+	var in ApprovalInput
+	if err := json.Unmarshal(req.Input, &in); err != nil {
+		return nil, fmt.Errorf("decode approval input: %w", err)
+	}
+
+	var id int64
+	err := a.store.pool.QueryRow(ctx, `
+        insert into approvals (idempotency_key, run_id, vendor_id, subject, total_cents)
+        values ($1, $2, $3, $4, $5)
+        on conflict (idempotency_key) do nothing
+        returning id`,
+		req.IdempotencyKey, req.RunID, in.VendorID, in.Subject, in.TotalCents,
+	).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := a.store.pool.QueryRow(ctx,
+			"select id from approvals where idempotency_key = $1", req.IdempotencyKey).Scan(&id); err != nil {
+			return nil, fmt.Errorf("look up pending approval: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("record approval request: %w", err)
+	}
+
+	poll := time.NewTicker(300 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		var status string
+		var reply *string
+		if err := a.store.pool.QueryRow(ctx, "select status, reply from approvals where id = $1", id).Scan(&status, &reply); err != nil {
+			return nil, fmt.Errorf("check approval status: %w", err)
+		}
+		if status == "approved" {
+			out := ApprovalOutput{Approved: true}
+			if reply != nil {
+				out.Reply = *reply
+			}
+			return json.Marshal(out)
+		}
+		select {
+		case <-poll.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// Approve grants the oldest pending approval for a run, recording what the operator actually typed.
+// One workload run has at most one approval outstanding at a time, so it does not need to be told
+// which.
+func (s *Store) Approve(ctx context.Context, runID, reply string) error {
+	tag, err := s.pool.Exec(ctx,
+		"update approvals set status = 'approved', reply = $2, decided_at = now() where run_id = $1 and status = 'pending'",
+		runID, reply)
+	if err != nil {
+		return fmt.Errorf("approve: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("no pending approval for this run")
+	}
+	return nil
+}
+
+type SlackInput struct {
+	PurchaseOrderID int64  `json:"purchase_order_id"`
+	Channel         string `json:"channel"`
+	Message         string `json:"message"`
+}
+
+type SlackOutput struct {
+	Channel string `json:"channel"`
+
+	// Duplicate mirrors EmailOutput.Duplicate: true when this exact notification had already been
+	// sent and was not sent again.
+	Duplicate bool `json:"duplicate"`
+}
+
+// SlackExecutor posts a notification after a purchase order goes out. Mocked the same way the email
+// step is mocked -- the row is the send -- so the demo shows the idempotency pattern applied twice
+// instead of looking like a one-off trick built for email.
+func (s *Store) SlackExecutor() executor.Executor { return &slackExecutor{store: s} }
+
+type slackExecutor struct{ store *Store }
+
+func (sl *slackExecutor) Close() error { return nil }
+
+func (sl *slackExecutor) Execute(ctx context.Context, req executor.Request) (json.RawMessage, error) {
+	var in SlackInput
+	if err := json.Unmarshal(req.Input, &in); err != nil {
+		return nil, fmt.Errorf("decode slack input: %w", err)
+	}
+	if in.PurchaseOrderID == 0 || in.Channel == "" {
+		return nil, errors.New("slack notification needs a purchase order id and a channel")
+	}
+
+	var id int64
+	err := sl.store.pool.QueryRow(ctx, `
+        insert into slack_notifications
+            (idempotency_key, run_id, purchase_order_id, channel, message)
+        values ($1, $2, $3, $4, $5)
+        on conflict (idempotency_key) do nothing
+        returning id`,
+		req.IdempotencyKey, req.RunID, in.PurchaseOrderID, in.Channel, in.Message,
+	).Scan(&id)
+
+	if perr := pace(ctx, sl.store.StepDelay); perr != nil {
+		return nil, perr
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return json.Marshal(SlackOutput{Channel: in.Channel, Duplicate: true})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("send slack notification: %w", err)
+	}
+	return json.Marshal(SlackOutput{Channel: in.Channel})
 }
 
 // pace waits out the demo delay, and gives up if the run is cancelled while waiting.

@@ -1,0 +1,245 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bulkhead — architecture notes</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --dim: #8b949e;
+    --ok: #3fb950; --replayed: #8957e5; --failed: #da3633; --warn: #d29922; --accent: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .tagline { padding: 9px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+             color: var(--dim); font-size: 12.5px; line-height: 1.45; }
+  .tagline b { color: var(--text); font-weight: 600; }
+  .tagline a { color: var(--accent); }
+  main { padding: 18px 20px; max-width: 1400px; margin: 0 auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.mono, th.mono { font-family: var(--mono); }
+  .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+           padding: 16px 18px; margin-bottom: 18px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; }
+  .panel h2 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+  .callout { border: 1px solid var(--warn); border-radius: 8px; padding: 13px 16px;
+             background: #1c1810; font-size: 14px; }
+  .callout b { color: #e3b341; }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  svg .lbl { fill: #e6edf3; font-size: 13px; font-weight: 600; }
+  svg .sub { fill: #8b949e; font-size: 10.5px; }
+  svg .edge { fill: #8b949e; font-size: 11px; }
+</style>
+
+<header>
+  <h1>bulkhead</h1>
+</header>
+
+<div class="tagline"><b>architecture notes</b><br>the how-it-works reference kept out of the live demo — see <a href="/">the run console</a></div>
+
+<main>
+  <div class="panel">
+    <h2>One path in <small>every run arrives the same way, new or retried</small></h2>
+    <svg viewBox="0 0 1140 430" style="width:100%;height:auto">
+      <defs>
+        <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+        </marker>
+        <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+        </marker>
+        <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8957e5"/>
+        </marker>
+        <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#527fff"/>
+        </marker>
+      </defs>
+
+      <rect x="12" y="176" width="132" height="60" rx="9" fill="#161b22" stroke="#30363d"/>
+      <text class="lbl" x="78" y="200" text-anchor="middle">Operator</text>
+      <text class="sub" x="78" y="218" text-anchor="middle">asks a question</text>
+
+      <path d="M148 206 H206" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+      <rect x="212" y="176" width="126" height="60" rx="9" fill="#161b22" stroke="#30363d"/>
+      <text class="lbl" x="275" y="200" text-anchor="middle">API</text>
+      <text class="sub" x="275" y="218" text-anchor="middle">POST /runs</text>
+
+      <!-- API writes durable run state to Checkpoints store -->
+      <path d="M275 176 V84 H622" stroke="#527fff" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ab)"/>
+      <text class="edge" x="450" y="74" text-anchor="middle" fill="#527fff">1. write run &amp; input (durable state)</text>
+
+      <!-- API enqueues lightweight pointer -->
+      <path d="M342 206 H402" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+      <text class="edge" x="372" y="197" text-anchor="middle">2. enqueue run id</text>
+
+      <rect x="408" y="166" width="150" height="80" rx="9" fill="#2a0f1e" stroke="#e7157b" stroke-width="1.8"/>
+      <rect x="424" y="182" width="17" height="17" rx="3" fill="#e7157b"/>
+      <text class="lbl" x="450" y="196">Queue</text>
+      <text class="sub" x="424" y="219">leased · at-least-once</text>
+      <text class="sub" x="424" y="234" fill="#e7157b">Amazon SQS</text>
+
+      <path d="M562 206 H622" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+      <text class="edge" x="592" y="197" text-anchor="middle">3. claim lease</text>
+
+      <rect x="628" y="166" width="150" height="80" rx="9" fill="#2a1608" stroke="#ed7100" stroke-width="1.8"/>
+      <rect x="644" y="182" width="17" height="17" rx="3" fill="#ed7100"/>
+      <text class="lbl" x="670" y="196">Worker</text>
+      <text class="sub" x="644" y="219">stateless · scales on depth</text>
+      <text class="sub" x="644" y="234" fill="#ed7100">ECS / EKS + KEDA</text>
+
+      <path d="M700 250 V286 H486 V250" stroke="#d29922" stroke-width="1.6" fill="none"
+            stroke-dasharray="5 4" marker-end="url(#aw)"/>
+      <text class="edge" x="593" y="305" text-anchor="middle" fill="#d29922">
+        worker dies → lease expires → the same message is delivered again
+      </text>
+      <text class="edge" x="593" y="322" text-anchor="middle" fill="#6e7681">
+        recovery is not a second path; it is redelivery
+      </text>
+
+      <rect x="628" y="44" width="150" height="80" rx="9" fill="#101a33" stroke="#527fff" stroke-width="1.8"/>
+      <rect x="644" y="60" width="17" height="17" rx="3" fill="#527fff"/>
+      <text class="lbl" x="670" y="74">Checkpoints</text>
+      <text class="sub" x="644" y="97">every step, before it runs</text>
+      <text class="sub" x="644" y="112" fill="#527fff">Amazon RDS</text>
+
+      <path d="M688 166 V128" stroke="#8957e5" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+      <path d="M720 128 V164" stroke="#8957e5" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+      <text class="edge" x="500" y="146" fill="#c297ff">write intent, then replay on resume</text>
+
+      <rect x="852" y="44" width="150" height="80" rx="9" fill="#062822" stroke="#01a88d" stroke-width="1.8"/>
+      <rect x="868" y="60" width="17" height="17" rx="3" fill="#01a88d"/>
+      <text class="lbl" x="894" y="74">Model</text>
+      <text class="sub" x="868" y="97">a step, so it replays free</text>
+      <text class="sub" x="868" y="112" fill="#01a88d">Bedrock / Kimi</text>
+      <path d="M782 130 L850 100" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+      <rect x="852" y="166" width="150" height="80" rx="9" fill="#1c1810" stroke="#d29922" stroke-width="1.8"/>
+      <rect x="868" y="182" width="17" height="17" rx="3" fill="#d29922"/>
+      <text class="lbl" x="894" y="196">Purchase order</text>
+      <text class="sub" x="868" y="219">carries an idempotency key</text>
+      <text class="sub" x="868" y="234" fill="#d29922">your ERP / SES</text>
+      <path d="M782 206 H848" stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+      <text class="edge" x="815" y="197" text-anchor="middle">send</text>
+
+      <text class="edge" x="927" y="268" text-anchor="middle" fill="#e3b341">the only step that costs money</text>
+      <text class="edge" x="927" y="285" text-anchor="middle" fill="#6e7681">delivered twice, ordered once</text>
+
+      <rect x="212" y="348" width="566" height="56" rx="9" fill="#161b22" stroke="#30363d" stroke-dasharray="4 4"/>
+      <text class="lbl" x="232" y="371">Traces — OpenTelemetry → Langfuse, or any OTLP collector</text>
+      <text class="sub" x="232" y="390">one trace per run, spanning every restart, because the trace id is derived from the run id</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>What runs where</h2>
+    <table>
+      <thead><tr><th>layer</th><th>on this laptop</th><th>in your environment</th></tr></thead>
+      <tbody>
+        <tr><td><b>API / Ingress</b></td><td class="mono">Go HTTP server on :8080,<br>POST /runs</td>
+            <td><b style="color:#58a6ff">API Gateway / ALB + ECS</b> — writes run record and user input directly to Postgres in one transaction, then pushes only the run ID into the queue. Stateless ingress.</td></tr>
+        <tr><td><b>Queue</b></td><td class="mono">Postgres,<br>FOR UPDATE SKIP LOCKED</td>
+            <td><b style="color:#e7157b">Amazon SQS</b> — a visibility timeout is the same lease, and SKIP LOCKED is what the broker does for you.
+                Postgres is a real queue, not a stand-in: it is what Oban, GoodJob and River run on in production.
+                Move when throughput passes what one database can absorb, or when you would rather not operate it —
+                SQS also brings redrive, FIFO dedupe and long-polling, none of which are built here.</td></tr>
+        <tr><td><b>Checkpoints</b></td><td class="mono">Postgres in Docker,<br>localhost:5432</td>
+            <td><b style="color:#527fff">Amazon RDS</b> — one connection string; the schema, the write ordering and the replay logic are unchanged</td></tr>
+        <tr><td><b>Workers</b></td><td class="mono">one process, serial</td>
+            <td><b style="color:#ed7100">ECS or EKS</b>, scaled on queue depth with KEDA; workers are stateless because all durable state is in the checkpoint store</td></tr>
+        <tr><td><b>Agent sandbox</b></td><td class="mono">local subprocess,<br>NDJSON over pipes</td>
+            <td>A container, gVisor, or a Firecracker microVM once the agent runs untrusted code — the boundary is already a pipe, so the agent cannot tell</td></tr>
+        <tr><td><b>Model</b></td><td class="mono">Kimi, OpenAI-compatible API</td>
+            <td><b style="color:#01a88d">Bedrock</b>, Vertex, or Anthropic directly — selected by config, because only answer quality depends on it</td></tr>
+        <tr><td><b>Outbox / Idempotency</b></td><td class="mono">purchase_orders table with unique key</td>
+            <td><b style="color:#d29922">Transactional Outbox / Redis</b> — shields external APIs (ERP, SES, vendor EDI) against duplicate execution when a step is retried mid-send</td></tr>
+        <tr><td><b>Side effect</b></td><td class="mono">a row in purchase_orders</td>
+            <td>Your ERP, SES, or vendor EDI — the idempotency key used here is the one you would pass to their API</td></tr>
+        <tr><td><b>Traces</b></td><td class="mono">OTLP exporter, off by default</td>
+            <td>Langfuse, self-hosted or cloud, or any OTLP collector — one environment variable</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>What a message is <small>because everything below depends on it</small></h2>
+    <p style="margin:0 0 12px">A message is <b>a run id and a delivery count</b>. That is the whole
+      thing — the work itself never travels. The steps, their inputs, their outputs and the answer
+      all live in Postgres from the moment the run is created, and the message is a pointer saying
+      <i>somebody should be working on this one</i>.</p>
+    <p style="margin:0 0 12px;color:var(--dim);font-size:14px">That is why losing a worker loses
+      nothing. There is no payload in flight to drop, and no state in a process to reconstruct —
+      only a claim that stopped being renewed.</p>
+    <table>
+      <thead><tr><th>when</th><th>what happens</th><th>where the work is</th></tr></thead>
+      <tbody>
+        <tr><td><b>You ask a question</b></td>
+            <td><span class="mono">POST /runs</span> writes the run and the question to Postgres,
+                then enqueues its id. Two writes, one transaction's worth of intent.</td>
+            <td class="mono">Postgres</td></tr>
+        <tr><td><b>A worker claims it</b></td>
+            <td>The row is hidden for the lease duration and <span class="mono">deliveries</span>
+                increments. Nothing is copied anywhere.</td>
+            <td class="mono">Postgres</td></tr>
+        <tr><td><b>The run executes</b></td>
+            <td>Each step is written <i>before</i> it runs and updated after. The worker holds no
+                durable state of its own.</td>
+            <td class="mono">Postgres</td></tr>
+        <tr><td><b>It finishes</b></td>
+            <td>The message is deleted. Until that delete, it comes back.</td>
+            <td class="mono">Postgres</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>How a stopped run gets picked back up</h2>
+    <p style="margin:0 0 14px;color:var(--dim);font-size:14px">Nothing here polls for stuck work
+      or reconciles state on a timer. A run that stops is a message whose lease nobody renewed,
+      and that is the only condition anything has to detect.</p>
+    <table>
+      <thead><tr><th>what stopped</th><th>what picks it back up</th><th>who does it</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>One worker died</b><br><span style="color:var(--dim);font-size:12.5px">others still running</span></td>
+          <td>It stops renewing the lease. Within the lease window the message becomes visible again
+              and another worker claims it, replays the completed steps from the checkpoint store,
+              and carries on from the step that was in flight.</td>
+          <td><b style="color:var(--ok)">Nobody.</b> Seconds, unattended.</td>
+        </tr>
+        <tr>
+          <td><b>Every worker died</b><br><span style="color:var(--dim);font-size:12.5px">the whole process is gone</span></td>
+          <td>The message stays in the queue with an expired lease — visible, unclaimed, and
+              waiting. Nothing is lost, because nothing was ever held in memory. When a process
+              comes back it claims the message on its normal poll; recovery is not a startup
+              routine, it is the same loop as always.</td>
+          <td>Whatever restarts the process — <b>ECS, Kubernetes,</b> or the Restart button in
+              this demo. Then it is automatic again.</td>
+        </tr>
+        <tr>
+          <td><b>The run itself keeps failing</b><br><span style="color:var(--dim);font-size:12.5px">a poison message</span></td>
+          <td>Each delivery increments a counter, visible in the log as
+              <span class="mono">deliveries=N</span>. That number is the signal to stop retrying
+              and route the message aside for a human rather than loop on it forever.</td>
+          <td><b style="color:var(--warn)">Not built yet</b> — dead-letter queue, Milestone 6.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Why duplicates are assumed rather than prevented</h2>
+    <div class="callout">
+      Exactly-once delivery is not available to anything that talks over a network, so nothing here
+      claims it. The queue delivers <b>at least once</b>, and a second delivery is made harmless three
+      ways: a step is written down <b>before</b> it runs, a step that already completed is
+      <b>replayed</b> from its checkpoint instead of re-executed, and the one step with an effect in
+      the world carries an <b>idempotency key</b> the receiving system can recognise. Kill the control
+      plane mid-send and the vendor still receives exactly one purchase order.
+    </div>
+  </div>
+</main>

@@ -91,6 +91,14 @@ func (b *Buffer) record(r slog.Record) {
 	b.mu.Unlock()
 }
 
+// Clear empties the buffer without resetting the id counter, so a client still holding an old
+// Last-Event-ID just sees nothing until the next real line rather than colliding with a reused id.
+func (b *Buffer) Clear() {
+	b.mu.Lock()
+	b.lines = nil
+	b.mu.Unlock()
+}
+
 // Since returns lines newer than the given id, waiting up to timeout for one to arrive rather than
 // returning empty immediately -- so a tailing client is a blocked read, not a busy loop.
 func (b *Buffer) Since(ctx context.Context, after int64, timeout time.Duration) []Line {

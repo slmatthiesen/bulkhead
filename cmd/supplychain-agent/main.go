@@ -72,15 +72,34 @@ func run() error {
 		}
 	}
 
-	// 3. One purchase order per vendor.
+	// 3. One purchase order per vendor, followed by a Slack update so purchasing knows without
+	// watching the console.
 	sent := 0
 	for _, vendorID := range vendors {
 		rows := byVendor[vendorID]
+		po := purchaseOrder(vendorID, rows)
+
+		var approval supplychain.ApprovalOutput
+		approvalIn := supplychain.ApprovalInput{VendorID: vendorID, Subject: po.Subject, TotalCents: orderTotal(rows)}
+		if err := s.step(supplychain.KindApprove, approvalIn, &approval); err != nil {
+			return err
+		}
+
 		var out supplychain.EmailOutput
-		if err := s.step(supplychain.KindEmail, purchaseOrder(vendorID, rows), &out); err != nil {
+		if err := s.step(supplychain.KindEmail, po, &out); err != nil {
 			return err
 		}
 		sent++
+
+		var notice supplychain.SlackOutput
+		slackIn := supplychain.SlackInput{
+			PurchaseOrderID: out.PurchaseOrderID,
+			Channel:         "#purchasing",
+			Message:         fmt.Sprintf("Purchase order sent to %s — $%.2f", out.VendorEmail, float64(out.TotalCents)/100),
+		}
+		if err := s.step(supplychain.KindSlack, slackIn, &notice); err != nil {
+			return err
+		}
 	}
 
 	return s.final(fmt.Sprintf("%d short products, %d purchase orders sent", stock.Count, sent), true)
@@ -140,6 +159,14 @@ func purchaseOrder(vendorID string, rows []supplychain.InventoryRow) supplychain
 		Body:      body.String(),
 		LineItems: items,
 	}
+}
+
+func orderTotal(rows []supplychain.InventoryRow) int {
+	total := 0
+	for _, r := range rows {
+		total += r.ReorderQuantity * r.UnitCostCents
+	}
+	return total
 }
 
 // step asks the control plane to execute one step and decodes the result into out.

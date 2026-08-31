@@ -61,6 +61,11 @@ go build ./...
 go run ./cmd/bulkheadd        # control plane on 127.0.0.1:8080
 ```
 
+## Demo Video
+
+> **[▶️ Watch the 5-Minute Bulkhead Crash Recovery & Idempotency Demo](https://share.descript.com/view/8xbsqxxxybX)**  
+> Demonstrates a hard crash (`kill -9`) mid-transaction, automatic lease expiration via Postgres `FOR UPDATE SKIP LOCKED`, checkpoint replay, and idempotency key deduplication to prevent double-spending purchase orders.
+
 ## Watching a run resume
 
 The control plane serves a trajectory viewer at <http://127.0.0.1:8080>. It tails
