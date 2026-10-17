@@ -24,8 +24,27 @@ INVENTORY_SELECT = """
 """
 
 
+_resolved_url: str | None = None
+
+
 def database_url() -> str:
-    return os.environ.get("BULKHEAD_DATABASE_URL", DEFAULT_URL)
+    """Locally: BULKHEAD_DATABASE_URL, or the docker-compose default. On AgentCore Runtime nothing
+    is in the environment, so the connection string is fetched once from AgentCore Identity, where
+    `agentcore add credential --name neon` put it. Secrets never sit in agentcore.json or the zip."""
+    global _resolved_url
+    if _resolved_url:
+        return _resolved_url
+    url = os.environ.get("BULKHEAD_DATABASE_URL") or os.environ.get("AGENTCORE_CREDENTIAL_NEON")
+    if not url and os.environ.get("BULKHEAD_USE_IDENTITY"):
+        from bedrock_agentcore.identity.auth import requires_api_key
+
+        @requires_api_key(provider_name="neon")
+        def fetch(*, api_key: str) -> str:
+            return api_key
+
+        url = fetch()
+    _resolved_url = url or DEFAULT_URL
+    return _resolved_url
 
 
 def connect() -> psycopg.Connection:
