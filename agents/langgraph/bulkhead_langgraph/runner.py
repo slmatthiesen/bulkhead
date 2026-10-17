@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import time
+
 from langgraph.types import Command
 
-from . import store
+from . import costs, store
 from .graph import build, open_checkpointer
 
 
 def run_thread(thread_id: str, resume: str | None = None, question: str = "", reseed: bool = False) -> dict:
+    started = time.monotonic()
     if reseed:
         with store.connect() as conn:
             store.reseed(conn)
@@ -31,8 +34,16 @@ def run_thread(thread_id: str, resume: str | None = None, question: str = "", re
         interrupts = snapshot.tasks[0].interrupts if snapshot.tasks else ()
         out["status"] = "awaiting_approval"
         out["pending"] = interrupts[0].value if interrupts else None
-        return out
-    out["status"] = "done"
+    else:
+        out["status"] = "done"
+
+    # The model is only called on the first invocation of a thread; a resumed run replays the
+    # stored completion, so later rows for the same run_id carry zero tokens. That is the point.
+    wall_ms = int((time.monotonic() - started) * 1000)
     with store.connect() as conn:
-        out["counts"] = store.counts(conn, thread_id)
+        first_invocation = costs.totals(conn, thread_id)["invocations"] == 0
+        out["cost"] = costs.record(conn, thread_id, out["explanation"] if first_invocation else "", wall_ms, out["status"])
+        if out["status"] == "done":
+            out["counts"] = store.counts(conn, thread_id)
+            out["cost_total"] = costs.totals(conn, thread_id)
     return out
