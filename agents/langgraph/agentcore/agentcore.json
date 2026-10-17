@@ -25,10 +25,6 @@
         {
           "name": "BULKHEAD_AGENT_USE_LLM",
           "value": "1"
-        },
-        {
-          "name": "BULKHEAD_MODEL",
-          "value": "us.amazon.nova-pro-v1:0"
         }
       ]
     }
