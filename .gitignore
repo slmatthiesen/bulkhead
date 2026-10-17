@@ -26,3 +26,4 @@ bin/
 
 # Local credentials, never committed
 .env.local
+docker-compose.override.yml
