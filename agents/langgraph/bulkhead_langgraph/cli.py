@@ -13,10 +13,7 @@ import argparse
 import json
 import sys
 
-from langgraph.types import Command
-
-from . import store
-from .graph import build, open_checkpointer
+from .runner import run_thread
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,31 +24,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reseed", action="store_true")
     a = p.parse_args(argv)
 
-    if a.reseed:
-        with store.connect() as conn:
-            store.reseed(conn)
-
-    config = {"configurable": {"thread_id": a.thread}}
-    with open_checkpointer() as cp:
-        cp.setup()
-        graph = build(cp)
-        if a.resume is not None:
-            payload = Command(resume=a.resume)
-        elif graph.get_state(config).next:
-            payload = None  # a checkpoint exists and the run is not finished: continue it
-        else:
-            payload = {"run_id": a.thread, "question": a.question, "log": []}
-        result = graph.invoke(payload, config)
-        snapshot = graph.get_state(config)
-
-    for line in result.get("log", []):
+    out = run_thread(a.thread, resume=a.resume, question=a.question, reseed=a.reseed)
+    for line in out["log"]:
         print(line)
-    if snapshot.next:
-        interrupts = snapshot.tasks[0].interrupts if snapshot.tasks else ()
-        print("awaiting approval:", json.dumps(interrupts[0].value if interrupts else None))
+    if out["explanation"]:
+        print("model:", out["explanation"])
+    if out["status"] == "awaiting_approval":
+        print("awaiting approval:", json.dumps(out["pending"]))
         return 2
-    with store.connect() as conn:
-        print("done:", json.dumps(store.counts(conn, a.thread)))
+    print("done:", json.dumps(out["counts"]))
     return 0
 
 
