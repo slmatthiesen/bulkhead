@@ -47,6 +47,13 @@ lives. The two halves talk over one dumb boundary: the control plane spawns the 
 subprocess and reads newline-delimited JSON events from its stdout. No shared state across the
 line, which is what later lets the agent run in a different sandbox tier or on a different node.
 
+## The same demo on LangGraph + Bedrock AgentCore
+
+[`agents/langgraph/`](agents/langgraph/README.md) rebuilds the supply-chain workflow as a LangGraph
+graph with a Postgres checkpointer and deploys it to Amazon Bedrock AgentCore Runtime. Same tables,
+same idempotency keys, same crash test. The README there records what maps to what, what broke, and
+the one real difference: on AgentCore nothing redelivers a crashed run, so the caller owns the retry.
+
 ## Requirements
 
 - Go 1.24+
