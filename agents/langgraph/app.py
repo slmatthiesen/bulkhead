@@ -8,6 +8,7 @@ purchase order insert and before its checkpoint, the same window the Go demo ope
 except here it is the Runtime's microVM that dies.
 """
 
+import json
 import os
 
 from bedrock_agentcore import BedrockAgentCoreApp
@@ -17,8 +18,21 @@ from bulkhead_langgraph.runner import run_thread
 app = BedrockAgentCoreApp()
 
 
+def _unwrap(payload: dict) -> dict:
+    """The agentcore CLI sends whatever it is given as {"prompt": "<text>"}. If that text is a JSON
+    object, it is the real payload."""
+    prompt = payload.get("prompt")
+    if isinstance(prompt, str) and prompt.lstrip().startswith("{"):
+        try:
+            return json.loads(prompt)
+        except json.JSONDecodeError:
+            pass
+    return payload
+
+
 @app.entrypoint
 def invoke(payload: dict, context=None) -> dict:
+    payload = _unwrap(payload)
     thread_id = payload.get("thread_id") or getattr(context, "session_id", None) or "default"
     if payload.get("crash_after_send"):
         os.environ["BULKHEAD_CRASH_AFTER_SEND"] = "1"

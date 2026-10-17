@@ -15,7 +15,11 @@ from psycopg.rows import dict_row
 
 DEFAULT_URL = "postgresql://bulkhead:bulkhead@127.0.0.1:5436/bulkhead"
 
-WORKLOAD_DIR = Path(__file__).resolve().parents[3] / "internal" / "workload" / "supplychain"
+GO_WORKLOAD_DIR = Path(__file__).resolve().parents[3] / "internal" / "workload" / "supplychain"
+PACKAGED_SQL_DIR = Path(__file__).resolve().parent / "sql"
+# The Go tree when running from the repo; the packaged copy inside the deployed zip. A test asserts
+# the two are identical so the copy cannot drift.
+WORKLOAD_DIR = GO_WORKLOAD_DIR if GO_WORKLOAD_DIR.exists() else PACKAGED_SQL_DIR
 
 INVENTORY_SELECT = """
     select i.sku, i.name, i.category, i.on_hand, i.reorder_threshold, i.reorder_quantity,

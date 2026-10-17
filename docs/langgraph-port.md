@@ -39,3 +39,28 @@ keep log retention at 1 day.
 
 ## Out of scope
 Memory, Gateway, Identity. Mention them in the README as the parts not exercised.
+
+## What broke on the way to Runtime (2026-10-17, in order)
+
+1. **CodeZip rejected: "OpenTelemetry instrumentation executable not found."** Runtime turns
+   observability on by default and expects `aws-opentelemetry-distro` inside the zip. Added it to
+   `pyproject.toml`; the CLI packages from `uv.lock`, so `uv lock` first.
+2. **Bedrock `ResourceNotFoundException: Model use case details have not been submitted for this
+   account.`** The Runtime's execution role has `bedrock:InvokeModel`; the block is the account-level
+   Anthropic use-case agreement (`get-foundation-model-availability` shows
+   `agreementAvailability: NOT_AVAILABLE`). One-time console form. Ran the crash test with the
+   model step off until it clears.
+3. **`agentcore invoke --prompt-file` wraps the file as `{"prompt": "<text>"}`.** JSON flags never
+   reached the entrypoint; `thread_id` silently fell back to the session id. `app.py` now unwraps a
+   JSON string in `prompt`; the demo drives `aws bedrock-agentcore invoke-agent-runtime` directly.
+4. **Reseed read `schema.sql`/`seed.sql` from the Go tree**, which is not in the zip. Packaged a copy
+   under `bulkhead_langgraph/sql/` with a test that it is byte-identical to the Go files.
+5. **A crashed session does not come back.** Re-invoking the session whose process died returns
+   502 every time: a Runtime session is bound to its microVM. The resume has to arrive on a new
+   session id with the same `thread_id`. This is the real difference from the Go runtime's leased
+   queue, where redelivery is automatic: on AgentCore the caller owns the retry, and the LangGraph
+   checkpointer plus the idempotency key are what make that retry safe.
+
+Crash-and-resume verified on Runtime `bulkheadlanggraph_supplychain-aU9hU58oN9` (us-west-2):
+after the crash Neon shows 1 purchase order, 0 Slack rows; after the resume on a fresh session,
+"duplicate, not re-sent", 1 purchase order, 1 Slack row.
