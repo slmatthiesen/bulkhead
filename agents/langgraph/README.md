@@ -21,6 +21,47 @@ the parts most teams actually use, so the two can be compared honestly.
 | slog | CloudWatch logs and X-Ray traces via the OpenTelemetry distro |
 | Optional model step via an OpenAI-compatible endpoint | Claude or Nova via the Bedrock Converse API through LangChain |
 
+## Under the hood
+
+```
+ caller (aws bedrock-agentcore invoke-agent-runtime, or agentcore invoke)
+   │  payload {"thread_id", "resume"?, "question"?, "reseed"?, "crash_after_send"?}
+   ▼
+ AgentCore Runtime ── one microVM per runtime-session-id ── execution role (IAM)
+   │  app.py: BedrockAgentCoreApp entrypoint, unwraps {"prompt": "<json>"}
+   ▼
+ runner.run_thread(thread_id)
+   │  1. store.database_url()  ── first call fetches the Neon URL from AgentCore Identity
+   │  2. PostgresSaver.setup()  ── checkpoint tables in the same Neon database
+   │  3. graph.invoke(payload, {"configurable": {"thread_id": thread_id}})
+   ▼
+ StateGraph                              Postgres (Neon)
+   START → query_low_stock ─────────────▶ inventory, vendors      (read)
+         → explain ─────── Bedrock Converse (Claude / Nova) ──▶ checkpoint stores the completion
+         → approve ─────── interrupt()  ── graph stops; checkpoint says "waiting"
+                           ▲ resume with Command(resume="yes") on any later invocation
+         → send_po ───────────────────────▶ purchase_orders       (insert, unique idempotency_key)
+                           ✖ crash_after_send: os._exit(137) here, before the checkpoint
+         → notify ────────────────────────▶ slack_notifications   (insert, unique idempotency_key)
+         → more vendors? → approve … else END
+   │
+   ▼
+ costs.record() ──▶ run_costs (model, tokens, wall_ms, usd)    then the response
+```
+
+What each layer owns:
+
+- **Runtime** owns the process and its session. A session whose process dies is gone (502 on
+  re-invoke); it does not redeliver. The caller re-invokes with a new session id and the same
+  `thread_id`.
+- **Checkpointer** owns progress. Every completed node is written before the next runs, so a resumed
+  thread skips what finished and re-runs the node that was in flight. The model's completion is
+  part of that state, so a resume never calls the model again.
+- **Idempotency keys** own the side effects. `send_po` can be re-run blindly because the insert
+  collides on `run_id:vendor:email` and is reported as a duplicate instead of sent twice.
+- **Identity** owns the secret. The database URL is never in the zip, the config, or the repo.
+- **CloudWatch** owns the trace. The OpenTelemetry distro in the zip is what Runtime requires.
+
 ## The run
 
 ```
