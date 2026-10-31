@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "bulkheadlanggraph",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "bulkheadlanggraph"
+  },
+  "runtimes": [
+    {
+      "name": "supplychain",
+      "build": "CodeZip",
+      "entrypoint": "app.py",
+      "codeLocation": "./",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "authorizerType": "AWS_IAM",
+      "envVars": [
+        {
+          "name": "BULKHEAD_USE_IDENTITY",
+          "value": "1"
+        },
+        {
+          "name": "BULKHEAD_AGENT_USE_LLM",
+          "value": "1"
+        }
+      ]
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [
+    {
+      "authorizerType": "ApiKeyCredentialProvider",
+      "name": "neon"
+    }
+  ],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "capacityProviders": [],
+  "payments": []
+}

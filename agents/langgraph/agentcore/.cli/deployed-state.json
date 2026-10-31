@@ -1,0 +1,23 @@
+{
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "supplychain": {
+            "runtimeId": "bulkheadlanggraph_supplychain-aU9hU58oN9",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:955887581749:runtime/bulkheadlanggraph_supplychain-aU9hU58oN9",
+            "roleArn": "arn:aws:iam::955887581749:role/AgentCore-bulkheadlanggra-ApplicationAgentSupplycha-jXr5dxlWFOAt"
+          }
+        },
+        "credentials": {
+          "neon": {
+            "credentialProviderArn": "arn:aws:bedrock-agentcore:us-west-2:955887581749:token-vault/default/apikeycredentialprovider/neon"
+          }
+        },
+        "stackName": "AgentCore-bulkheadlanggraph-default",
+        "identityKmsKeyArn": "arn:aws:kms:us-west-2:955887581749:key/509bfe90-4bca-4d4d-b8ae-08d9c5becd6b",
+        "deployHash": "9e6837ad31c3ca52"
+      }
+    }
+  }
+}
